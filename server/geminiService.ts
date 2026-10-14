@@ -1,3 +1,4 @@
+import { resolveApiKey } from './aiCredentials';
 import 'dotenv/config';
 import { GoogleGenAI, Type } from '@google/genai';
 import ExcelJS from 'exceljs';
@@ -6,19 +7,9 @@ import { getSampleCollateralAssets } from './sampleData';
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
 
-let aiInstance: GoogleGenAI | null = null;
 function getAI(): GoogleGenAI | null {
-  if (!aiInstance && process.env.GEMINI_API_KEY) {
-    aiInstance = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  }
-  return aiInstance;
+  const apiKey = resolveApiKey();
+  return apiKey ? new GoogleGenAI({ apiKey }) : null;
 }
 
 function parseJsonSafely(text: string) {
@@ -108,7 +99,7 @@ CHỈ TRẢ VỀ JSON ARRAY.`;
       const parsed = parseJsonSafely(responseText);
       records = Array.isArray(parsed) ? parsed : [parsed];
     } catch (err: any) {
-      console.warn('Gemini extraction warning, falling back to smart heuristic:', err.message);
+      console.warn('Gemini request failed.');
     }
   }
 
@@ -206,7 +197,7 @@ Chỉ trả về JSON Array thuần túy.`,
         const parsed = parseJsonSafely(resp.text || '[]');
         loans = Array.isArray(parsed) ? parsed : [parsed];
       } catch (err: any) {
-        console.warn('CIC AI parsing fallback:', err.message);
+        console.warn('Gemini request failed.');
       }
     }
 
@@ -343,7 +334,7 @@ Chỉ trả về JSON thuần túy.`,
         });
         fin = parseJsonSafely(resp.text || '{}');
       } catch (err: any) {
-        console.warn('BCTC AI parsing fallback:', err.message);
+        console.warn('Gemini request failed.');
       }
     }
 
@@ -449,7 +440,7 @@ CHỈ TRẢ VỀ JSON ARRAY.`;
       const parsed = parseJsonSafely(responseText);
       assets = Array.isArray(parsed) ? parsed : [parsed];
     } catch (e: any) {
-      console.warn('Collateral AI extraction fallback:', e.message);
+      console.warn('Gemini request failed.');
     }
   }
 
@@ -535,7 +526,7 @@ Nhiệm vụ của bạn là phản hồi tức thì, ngắn gọn, chính xác 
       modelUsed: model,
     };
   } catch (err: any) {
-    console.warn(`Model ${model} encounter error, trying fallback to gemini-2.5-flash:`, err.message);
+    console.warn('Gemini request failed.');
     try {
       const fallbackResponse = await ai.models.generateContent({
         model: 'gemini-2.5-flash',
@@ -551,7 +542,7 @@ Nhiệm vụ của bạn là phản hồi tức thì, ngắn gọn, chính xác 
       };
     } catch (e: any) {
       return {
-        text: `Lỗi kết nối Gemini AI: ${e.message || err.message}`,
+        text: 'Không kết nối được Gemini. Kiểm tra API key cá nhân, hạn mức và model.',
         modelUsed: model,
       };
     }

@@ -110,3 +110,9 @@ Dự án được xây dựng và phát triển bởi **Nguyễn Trường Thiê
 Kiểm tra: `npm run lint`, `npm run build`, `npm test` (7 test gồm kiểm thử API thực tế).
 
 Đây vẫn là mô hình một đơn vị dùng chung cấu hình ngân hàng. Các API nghiệp vụ chưa bắt buộc đăng nhập và chưa có rate limit; chưa phù hợp triển khai public với dữ liệu khách hàng thật. Chưa xác minh nghiệp vụ thuế/pháp lý, kết quả AI với API key thật, hoặc QR bằng ứng dụng ngân hàng. Google/Firebase và Gemini cần cấu hình dịch vụ riêng. Cần cơ sở dữ liệu và quản lý phiên dùng chung nếu chạy nhiều server.
+
+### API key cá nhân
+
+Trong menu chung chọn **API key cá nhân** để nhập, cập nhật hoặc xóa Gemini API key. Key được giữ trong sessionStorage của tab theo tài khoản hiện tại; không ghi vào file cấu hình máy chủ, không lưu lâu dài trong localStorage. Đóng tab hoặc đăng xuất sẽ xóa key; mở lại cần nhập lại. Khi gọi AI, key đi qua backend ứng dụng tới Google Gemini; chỉ dùng trên kết nối HTTPS khi triển khai.
+
+Key cá nhân được ưu tiên cho chatbot, đơn hàng, OCR, CIC/BCTC và tài sản. Khi người dùng không đặt key riêng, ứng dụng dùng `GEMINI_API_KEY` của máy chủ nếu có. Key cá nhân lỗi không tự chuyển sang key máy chủ. Nút Lưu chỉ kiểm tra định dạng và lưu phiên, không xác nhận key còn hạn mức hoặc hoạt động. Backend dùng ngữ cảnh riêng cho từng request, tránh dùng lẫn key giữa người dùng đồng thời.
