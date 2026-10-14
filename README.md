@@ -63,18 +63,21 @@
 ## 💻 Hướng Dẫn Cài Đặt & Khởi Chạy
 
 ### Yêu Cầu Hệ Thống:
-* Node.js >= 18.x
-* Quản lý gói: npm hoặc bun
+* Node.js >= 22.12.0
+* Quản lý gói: npm (dùng package-lock.json)
 
 ### Các bước cài đặt:
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/ntrthientan-sys/VeriFin-Pro.git
-cd VeriFin-Pro
+git clone https://github.com/ntrthientan-sys/VeriFin-Pro-2.git
+cd VeriFin-Pro-2
 
 # 2. Cài đặt các gói phụ thuộc
-npm install
+npm ci
+
+# Sao chép .env.example thành .env và điền cấu hình
+cp .env.example .env
 
 # 3. Khởi chạy môi trường phát triển (Full-stack Server + Vite)
 npm run dev
@@ -92,3 +95,18 @@ npm start
 
 ## 🔒 Bản Quyền & Giấy Phép
 Dự án được xây dựng và phát triển bởi **Nguyễn Trường Thiên Tân**. Mọi ý kiến đóng góp, phản hồi hoặc yêu cầu tích hợp giải pháp chuyên sâu vui lòng liên hệ trực tiếp qua SĐT/Zalo: **0817221722**.
+
+## Cấu hình bản sửa và giới hạn vận hành
+
+- `ADMIN_EMAILS`: danh sách email quản trị phân cách bằng dấu phẩy. Chỉ các email này được sửa tài khoản thụ hưởng dùng chung. Chức danh/nhánh do người dùng chọn không cấp quyền quản trị.
+- `ADMIN_PASSWORD`: mật khẩu ít nhất 12 ký tự, dùng tạo tài khoản quản trị đầu tiên trong `ADMIN_EMAILS` khi chưa tồn tại. Không có tài khoản/mật khẩu demo được tạo sẵn. Đổi biến này không thay mật khẩu tài khoản đã tồn tại.
+- `DATA_DIR`: thư mục dữ liệu bền vững (mặc định `./data`). Tài khoản được lưu với mật khẩu băm scrypt có salt; cấu hình ngân hàng cũng được giữ sau khi khởi động lại. Sao lưu và bảo vệ thư mục này; phiên đăng nhập cục bộ vẫn hết hiệu lực khi máy chủ khởi động lại.
+- `GEMINI_API_KEY`: cần cho OCR/CIC/BCTC/chat AI. Lỗi AI hoặc kết quả rỗng trả lỗi, không thay bằng hồ sơ khách hàng giả. Sổ đỏ chỉ dùng dữ liệu mẫu khi chọn rõ `use_sample`.
+- `FIREBASE_PROJECT_ID`: phải khớp project trong `firebase-applet-config.json` nếu dùng đăng nhập Google. Backend xác minh ID token bằng Firebase Admin SDK, không tin thông tin người dùng do frontend tự khai. Cần cấu hình Google provider và authorized domains tại Firebase. Chưa kiểm thử OAuth thật trong môi trường kiểm tra.
+- Tài khoản thụ hưởng ban đầu để trống. Đăng nhập quản trị và cấu hình trước khi xuất PDF công nợ. Không tự chọn tài khoản mẫu.
+- File xuất và phiên đối soát gắn với cookie HttpOnly của trình duyệt, hết hạn sau 30 phút; tổng buffer giới hạn 256 MiB. Khởi động lại làm mất file tạm. Cookie không thay thế cơ chế phân quyền tổ chức.
+- Đối soát công nợ chỉ tự khớp mã KH đầy đủ, không khớp theo tên; giao dịch chứa nhiều mã không được tự phân bổ. Một khoản thu được phân bổ lần lượt qua các dòng cùng mã, không cộng lặp. Cần đối chiếu thủ công các khoản không khớp và xác định sao kê đã bao gồm khoản “đã thu” hay chưa.
+
+Kiểm tra: `npm run lint`, `npm run build`, `npm test` (7 test gồm kiểm thử API thực tế).
+
+Đây vẫn là mô hình một đơn vị dùng chung cấu hình ngân hàng. Các API nghiệp vụ chưa bắt buộc đăng nhập và chưa có rate limit; chưa phù hợp triển khai public với dữ liệu khách hàng thật. Chưa xác minh nghiệp vụ thuế/pháp lý, kết quả AI với API key thật, hoặc QR bằng ứng dụng ngân hàng. Google/Firebase và Gemini cần cấu hình dịch vụ riêng. Cần cơ sở dữ liệu và quản lý phiên dùng chung nếu chạy nhiều server.

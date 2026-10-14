@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { GoogleGenAI, Type } from '@google/genai';
 import ExcelJS from 'exceljs';
 import { styleHeader, collateralLtvLogic } from './excelService';
@@ -50,6 +51,7 @@ export async function extractBatchAI(
 
   let records: any[] = [];
   const ai = getAI();
+  if (!ai) throw new Error('Chưa cấu hình GEMINI_API_KEY. Không thể phân tích AI.');
 
   if (ai) {
     try {
@@ -110,88 +112,7 @@ CHỈ TRẢ VỀ JSON ARRAY.`;
     }
   }
 
-  // Fallback demo/heuristic if no API key or empty
-  if (!records || records.length === 0) {
-    if (taskType === 'orders') {
-      records = [
-        {
-          'Tên khách hàng': 'Nguyễn Thu Trang',
-          'Số điện thoại': '0987654321',
-          'Sản phẩm': 'Váy hoa nhí vintage',
-          'Size/Loại': 'Size M',
-          'Số lượng': 2,
-          'Đơn giá': 320000,
-          'Tổng tiền': 640000,
-          'Địa chỉ': '123 Cầu Giấy, Hà Nội',
-        },
-        {
-          'Tên khách hàng': 'Trần Văn Hoàng',
-          'Số điện thoại': '0912345678',
-          'Sản phẩm': 'Áo polo nam thể thao',
-          'Size/Loại': 'Size L - Xanh navy',
-          'Số lượng': 3,
-          'Đơn giá': 250000,
-          'Tổng tiền': 750000,
-          'Địa chỉ': '45 Lê Duẩn, Đà Nẵng',
-        },
-        {
-          'Tên khách hàng': 'Lê Minh Quân',
-          'Số điện thoại': '0933112233',
-          'Sản phẩm': 'Giày sneaker canvas',
-          'Size/Loại': 'Size 42',
-          'Số lượng': 1,
-          'Đơn giá': 450000,
-          'Tổng tiền': 450000,
-          'Địa chỉ': '88 Hai Bà Trưng, Q.1, TP.HCM',
-        },
-      ];
-      if (rawText && rawText.trim().length > 0) {
-        records.push({
-          'Tên khách hàng': 'Khách đặt qua tin nhắn dán trực tiếp',
-          'Số điện thoại': '0901234567',
-          'Sản phẩm': rawText.slice(0, 40),
-          'Size/Loại': 'Mặc định',
-          'Số lượng': 1,
-          'Đơn giá': 300000,
-          'Tổng tiền': 300000,
-          'Địa chỉ': 'Theo tin nhắn',
-        });
-      }
-    } else {
-      records = [
-        {
-          'Ngày chứng từ': '2026-10-10',
-          'Đơn vị bán': 'Công ty Xăng Dầu Petrolimex',
-          'Số_Hóa_Đơn_Gốc': 'HD-009214',
-          'Nội dung chi phí': 'Đổ xăng xe ô tô công tác',
-          'Tiền trước thuế': 1200000,
-          'Thuế VAT': 120000,
-          'Tổng thanh toán': 1320000,
-          'Phân_Loại_Chi_Phí': 'Di chuyển',
-        },
-        {
-          'Ngày chứng từ': '2026-10-11',
-          'Đơn vị bán': 'Nhà hàng Ẩm Thực Phố Biển',
-          'Số_Hóa_Đơn_Gốc': 'HD-004312',
-          'Nội dung chi phí': 'Tiếp khách đối tác đợt 2',
-          'Tiền trước thuế': 3500000,
-          'Thuế VAT': 280000,
-          'Tổng thanh toán': 3780000,
-          'Phân_Loại_Chi_Phí': 'Ăn uống',
-        },
-        {
-          'Ngày chứng từ': '2026-10-12',
-          'Đơn vị bán': 'Nhà sách Fahasa',
-          'Số_Hóa_Đơn_Gốc': 'HD-001290',
-          'Nội dung chi phí': 'Giấy in A4 & Bút ký văn phòng',
-          'Tiền trước thuế': 650000,
-          'Thuế VAT': 52000,
-          'Tổng thanh toán': 702000,
-          'Phân_Loại_Chi_Phí': 'Văn phòng phẩm',
-        },
-      ];
-    }
-  }
+  if (!records.length) throw new Error('Không trích xuất được dữ liệu. Kiểm tra GEMINI_API_KEY và chứng từ đầu vào.');
 
   // Duplicate detection
   const seenKeys = new Set<string>();
@@ -245,6 +166,7 @@ export async function extractCicOrBctcAI(
   files: Array<{ buffer: Buffer; mimetype: string; originalname: string }>
 ) {
   const ai = getAI();
+  if (!ai) throw new Error('Chưa cấu hình GEMINI_API_KEY. Không thể phân tích AI.');
   const wb = new ExcelJS.Workbook();
 
   if (docType === 'cic') {
@@ -288,13 +210,7 @@ Chỉ trả về JSON Array thuần túy.`,
       }
     }
 
-    if (!loans.length) {
-      loans = [
-        { Ten_TCTD: 'Ngân hàng TMCP Ngoại Thương (Vietcombank)', Loai_Vay: 'Vay mua nhà trả góp', Du_No_VND: 650000000, Nhom_No: 1, Ky_Han_Con_Lai_Thang: 84, Lai_Suat_Nam_Uoc_Tinh: 0.085 },
-        { Ten_TCTD: 'Ngân hàng TMCP Quân Đội (MBBank)', Loai_Vay: 'Thẻ tín dụng Visa Platinum', Du_No_VND: 45000000, Nhom_No: 1, Ky_Han_Con_Lai_Thang: 12, Lai_Suat_Nam_Uoc_Tinh: 0.22 },
-        { Ten_TCTD: 'Công ty Tài chính FE Credit', Loai_Vay: 'Vay tiêu dùng tín chấp', Du_No_VND: 25000000, Nhom_No: 2, Ky_Han_Con_Lai_Thang: 18, Lai_Suat_Nam_Uoc_Tinh: 0.28 },
-      ];
-    }
+    if (!loans.length) throw new Error('Không đọc được CIC. Không có dữ liệu để tính toán.');
 
     const ws = wb.addWorksheet('Tham_Dinh_CIC_DSCR');
     const headers = [
@@ -431,20 +347,7 @@ Chỉ trả về JSON thuần túy.`,
       }
     }
 
-    if (!fin || Object.keys(fin).length === 0) {
-      fin = {
-        Doanh_Thu_Thuan: 12500000000,
-        Gia_Von_Hang_Ban: 8900000000,
-        Chi_Phi_Hoat_Dong: 2100000000,
-        Loi_Nhuan_Sau_Thue: 1500000000,
-        Tai_San_Ngan_Han: 4500000000,
-        Hang_Ton_Kho: 1800000000,
-        Tong_Tai_San: 8200000000,
-        No_Ngan_Han: 2800000000,
-        Tong_No_Phai_Tra: 3600000000,
-        Von_Chu_So_Huu: 4600000000,
-      };
-    }
+    if (!fin || Object.keys(fin).length === 0) throw new Error('Không đọc được BCTC. Không có dữ liệu để tính toán.');
 
     const ws = wb.addWorksheet('Phan_Tich_BCTC_Cong_Thuc');
     styleHeader(ws, ['Mã Chỉ Tiêu', 'Chỉ Tiêu Tài Chính / Hệ Số Thẩm Định', 'Số Liệu / Công Thức Excel', 'Đánh Giá Chuẩn Ngân Hàng'], '1E3A8A');
@@ -494,13 +397,14 @@ export async function extractCollateralAI(
   files: Array<{ buffer: Buffer; mimetype: string; originalname: string }>,
   useSample: boolean = false
 ) {
-  if (useSample || !files.length) {
+  if (useSample) {
     const sampleAssets = getSampleCollateralAssets();
     return collateralLtvLogic(sampleAssets);
   }
 
   let assets: any[] = [];
   const ai = getAI();
+  if (!ai) throw new Error('Chưa cấu hình GEMINI_API_KEY. Không thể phân tích AI.');
   if (ai) {
     try {
       const contentsParts: any[] = [];
@@ -550,7 +454,7 @@ CHỈ TRẢ VỀ JSON ARRAY.`;
   }
 
   if (!assets || assets.length === 0) {
-    assets = getSampleCollateralAssets();
+    throw new Error('Không đọc được hồ sơ tài sản. Kiểm tra API key và file đầu vào.');
   }
 
   return collateralLtvLogic(assets);
@@ -604,6 +508,7 @@ Nhiệm vụ của bạn là phản hồi tức thì, ngắn gọn, chính xác 
   }
 
   const ai = getAI();
+  if (!ai) throw new Error('Chưa cấu hình GEMINI_API_KEY. Không thể phân tích AI.');
   if (!ai) {
     return {
       text: `[Chế độ giải đáp nghiệp vụ mẫu]: Hệ thống đang chạy ở chế độ dự phòng do chưa phát hiện GEMINI_API_KEY trong môi trường. Về câu hỏi của bạn: Đối với nghiệp vụ ${roleType === 'credit_expert' ? 'thẩm định tín dụng và CIC' : 'kế toán công nợ'}, bạn hãy luôn kiểm tra chéo các chứng từ gốc và đối soát định kỳ. Để kích hoạt trí tuệ nhân tạo Gemini toàn diện, vui lòng cấu hình GEMINI_API_KEY trong bảng Secrets của AI Studio.`,

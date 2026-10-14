@@ -71,16 +71,17 @@ export async function processDebtModule(debtBuffer: Buffer, bankBuffer?: Buffer)
     const bDesc = bCols.find(c => /nội dung|diễn giải|description|memo/i.test(c)) || bCols[0];
     const bAmt = bCols.find(c => /số tiền|ghi có|có|credit|amount/i.test(c)) || bCols[bCols.length - 1];
 
+    const ids = [...new Set(dfDebt.map(row => String(row[colId] ?? '').trim()).filter(Boolean))];
     for (const bRow of dfBank) {
-      const descVal = String(bRow[bDesc] || '').toLowerCase();
-      const amtVal = Number(bRow[bAmt]) || 0;
-      for (const dRow of dfDebt) {
-        const khId = String(dRow[colId] || '').trim();
-        const khName = String(dRow[colName] || '').trim();
-        if ((khId && descVal.includes(khId.toLowerCase())) || (khName && descVal.includes(khName.toLowerCase()))) {
-          bankMatches[khId] = (bankMatches[khId] || 0) + amtVal;
-        }
-      }
+      const description = String(bRow[bDesc] || '').toLowerCase();
+      const amount = Number(bRow[bAmt]);
+      if (!Number.isFinite(amount) || amount <= 0) continue;
+      const matches = ids.filter(id => {
+        const escaped = id.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp('(^|[^a-z0-9])' + escaped + '($|[^a-z0-9])', 'i').test(description);
+      });
+      // Never allocate one transfer to several customers or match names ambiguously.
+      if (matches.length === 1) bankMatches[matches[0]] = (bankMatches[matches[0]] || 0) + amount;
     }
   }
 
@@ -103,7 +104,9 @@ export async function processDebtModule(debtBuffer: Buffer, bankBuffer?: Buffer)
 
     let daThu = 0;
     if (bankMatches[khId] !== undefined) {
-      daThu = bankMatches[khId];
+      const remainingPayment = bankMatches[khId];
+      daThu = Math.min(Math.max(phaiThu, 0), remainingPayment);
+      bankMatches[khId] -= daThu;
     } else if (colPaid && row[colPaid] !== undefined) {
       daThu = Number(row[colPaid]) || 0;
     }
@@ -196,6 +199,7 @@ function getSystemUnicodeFonts(): { regular: string | null; bold: string | null;
   }
 
   const regularPaths = [
+    '/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf',
     '/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf',
     '/usr/share/fonts/truetype/freefont/FreeSans.ttf',
     '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
@@ -206,6 +210,7 @@ function getSystemUnicodeFonts(): { regular: string | null; bold: string | null;
   ];
 
   const boldPaths = [
+    '/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf',
     '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf',
     '/usr/share/fonts/truetype/freefont/FreeSansBold.ttf',
     '/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf',
@@ -216,6 +221,7 @@ function getSystemUnicodeFonts(): { regular: string | null; bold: string | null;
   ];
 
   const italicPaths = [
+    '/usr/share/fonts/truetype/liberation2/LiberationSans-Italic.ttf',
     '/usr/share/fonts/truetype/liberation/LiberationSans-Italic.ttf',
     '/usr/share/fonts/truetype/freefont/FreeSansOblique.ttf',
     '/usr/share/fonts/truetype/dejavu/DejaVuSans-Oblique.ttf',
@@ -300,10 +306,11 @@ export async function createDebtPdf(
     doc.addFont('LiberationSans-Italic.ttf', 'SystemArial', 'italic');
   }
 
-  const bankName = bankAccount?.bankName || 'VietinBank (Ngân hàng TMCP Công Thương Việt Nam)';
-  const accountNo = bankAccount?.accountNo || '102868889999';
+  if (!bankAccount?.bankBin || !bankAccount?.accountNo || !bankAccount?.accountName) throw new Error('Vui lòng cấu hình tài khoản thụ hưởng trước khi xuất PDF.');
+  const bankName = bankAccount.bankName || '';
+  const accountNo = bankAccount.accountNo;
   const accountName = (bankAccount?.accountName || 'CÔNG TY CP THƯƠNG MẠI & CÔNG NGHỆ ÁNH DƯƠNG').toUpperCase();
-  const bankBin = bankAccount?.bankBin || '970415';
+  const bankBin = bankAccount.bankBin;
   const now = new Date();
   const day = String(now.getDate()).padStart(2, '0');
   const month = String(now.getMonth() + 1).padStart(2, '0');
@@ -327,7 +334,7 @@ export async function createDebtPdf(
       accountName,
     });
   } catch (err) {
-    console.error('Failed to generate VietQR EMVCo data url:', err);
+    throw err;
   }
 
   // Header Banner
@@ -2191,12 +2198,14 @@ export async function incomeAssessmentLogic(params: IncomeAssessmentParams) {
     incomes,
   } = params;
 
+  if (!Array.isArray(incomes) || !incomes.length) throw new Error('Vui lòng nhập danh sách thu nhập.');
   let totalDeclared = 0;
   let totalRecognized = 0;
 
   const analyzedIncomes = incomes.map(item => {
     const declared = Number(item.declaredAmount) || 0;
-    const haircut = Number(item.haircutPct) || 100;
+    const haircut = item.haircutPct == null ? 100 : Number(item.haircutPct);
+    if (!Number.isFinite(haircut) || haircut < 0 || haircut > 100 || !Number.isFinite(declared) || declared < 0) throw new Error('Thu nhập hoặc tỷ lệ ghi nhận không hợp lệ.');
     const recognized = Math.round(declared * (haircut / 100));
     totalDeclared += declared;
     totalRecognized += recognized;
@@ -2442,6 +2451,8 @@ export interface CashFlowForecastParams {
 export async function cashFlowForecastLogic(params: CashFlowForecastParams) {
   const { initialCash, safetyThreshold = 200000000, weeklyData } = params;
 
+  if (!Array.isArray(weeklyData) || !weeklyData.length) throw new Error('Vui lòng nhập dữ liệu tuần.');
+  if (!Number.isFinite(initialCash) || !Number.isFinite(safetyThreshold)) throw new Error('Số dư hoặc ngưỡng an toàn không hợp lệ.');
   let totalInflowSum = 0;
   let totalOutflowSum = 0;
   let minCash = initialCash;
@@ -2553,13 +2564,13 @@ export async function cashFlowForecastLogic(params: CashFlowForecastParams) {
     const fEnd = `=B${r}+M${r}`;
     const fAlert = `=IF(N${r}<${safetyThreshold}, "⚠️ Báo Động Thâm Hụt", "✅ An Toàn")`;
 
-    const totIn = Number(item.in_debt) + Number(item.in_sales) + Number(item.in_other);
+    const totIn = Number(item.in_debt || 0) + Number(item.in_sales || 0) + Number(item.in_other || 0);
     const totOut =
-      Number(item.out_cogs) +
-      Number(item.out_payroll) +
-      Number(item.out_rent) +
-      Number(item.out_bank_interest) +
-      Number(item.out_tax);
+      Number(item.out_cogs || 0) +
+      Number(item.out_payroll || 0) +
+      Number(item.out_rent || 0) +
+      Number(item.out_bank_interest || 0) +
+      Number(item.out_tax || 0);
     const net = totIn - totOut;
     const cEnd = pEnd + net;
     pEnd = cEnd;
