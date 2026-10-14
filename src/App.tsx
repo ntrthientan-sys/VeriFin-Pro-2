@@ -1,3 +1,5 @@
+import { ApiKeySettingsModule } from './ApiKeySettingsModule';
+import { aiFetch, clearPersonalApiKey } from './aiApi';
 import React, { useState, useEffect } from 'react';
 import {
   FileSpreadsheet,
@@ -92,6 +94,7 @@ export type TabKey =
   | 'chat'
   | 'guide'
   | 'bank_account'
+  | 'api_key'
   | 'debt'
   | 'reconcile'
   | 'payslip'
@@ -187,6 +190,7 @@ export default function App() {
     const token = localStorage.getItem('applet_auth_token');
     await fetch('/api/auth/logout', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {} });
     await logOutFirebase().catch(console.error);
+    clearPersonalApiKey();
     localStorage.removeItem('applet_auth_token');
     localStorage.removeItem('applet_auth_user');
     localStorage.removeItem('excel_ai_agent_user');
@@ -509,6 +513,8 @@ export default function App() {
             </button>
 
             {/* MỤC RIÊNG CẤU HÌNH TÀI KHOẢN & VIETQR */}
+            <button onClick={() => setActiveTab('api_key')} className="w-full text-left px-3.5 py-2.5 rounded-xl bg-slate-800 border border-slate-700 text-cyan-300 text-xs font-bold">🔑 API key cá nhân</button>
+
             <button
               onClick={() => setActiveTab('bank_account')}
               className={`w-full text-left px-3.5 py-2.5 rounded-xl transition-all flex items-center justify-between border ${
@@ -827,6 +833,7 @@ export default function App() {
         {activeTab === 'guide' && (
           <UserGuideModule onNavigate={setActiveTab} currentBranch={user.branch} />
         )}
+        {activeTab === 'api_key' && <ApiKeySettingsModule key={user.id || 'guest'} />}
         {activeTab === 'bank_account' && (
           <BankAccountConfigModule />
         )}
@@ -4078,7 +4085,7 @@ function OrdersModule() {
         for (const f of files) fd.append('files', f);
       }
 
-      const res = await fetch('/api/ai/extract-batch', { method: 'POST', body: fd });
+      const res = await aiFetch('/api/ai/extract-batch', { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Lỗi bóc tách đơn hàng');
       setResult(data);
@@ -4240,7 +4247,7 @@ function DocumentsModule() {
         for (const f of files) fd.append('files', f);
       }
 
-      const res = await fetch('/api/ai/extract-batch', { method: 'POST', body: fd });
+      const res = await aiFetch('/api/ai/extract-batch', { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Lỗi bóc tách chứng từ');
       setResult(data);
@@ -4576,7 +4583,7 @@ function CicBctcModule() {
         for (const f of files) fd.append('files', f);
       }
 
-      const res = await fetch('/api/bank/cic-bctc-extract', { method: 'POST', body: fd });
+      const res = await aiFetch('/api/bank/cic-bctc-extract', { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Lỗi bóc tách hồ sơ tín dụng');
       setResult(data);
@@ -4910,7 +4917,7 @@ function CollateralModule() {
         }
       }
 
-      const res = await fetch('/api/bank/collateral-ltv', {
+      const res = await aiFetch('/api/bank/collateral-ltv', {
         method: 'POST',
         body: fd,
       });

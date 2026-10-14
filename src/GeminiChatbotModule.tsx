@@ -1,3 +1,4 @@
+import { aiFetch } from './aiApi';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Bot,
@@ -245,7 +246,7 @@ export function GeminiChatbotModule({
         model,
       };
 
-      const res = await fetch('/api/chat/message', {
+      const res = await aiFetch('/api/chat/message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),

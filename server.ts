@@ -1,3 +1,4 @@
+import { withApiKey, parsePersonalApiKey } from './server/aiCredentials';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import express from 'express';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
@@ -54,6 +55,16 @@ const port = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Credentials remain isolated to one asynchronous request; never write them to disk.
+app.use(['/api/ai', '/api/chat', '/api/bank/cic-bctc-extract', '/api/bank/collateral-ltv'], (req, res, next) => {
+  try {
+    const key = parsePersonalApiKey(req.headers['x-gemini-api-key']);
+    withApiKey(key, next);
+  } catch {
+    res.status(400).json({ error: 'API key không đúng định dạng. Cập nhật lại trong Cấu hình API key.' });
+  }
+});
 
 // Multer storage in memory
 const upload = multer({
