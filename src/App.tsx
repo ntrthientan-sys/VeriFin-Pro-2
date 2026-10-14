@@ -129,14 +129,7 @@ export default function App() {
       if (saved) return JSON.parse(saved);
     } catch {}
     return {
-      id: 'usr_creator',
-      name: 'Nguyễn Trường Thiên Tân',
-      email: 'ntrthientan@gmail.com',
-      phone: '0817221722',
-      branch: 'office',
-      roleTitle: 'Tác Giả & Quản Trị Hệ Thống',
-      token: 'session_auth_tan',
-      loginAt: new Date().toISOString(),
+      id: 'usr_guest', name: 'Chưa đăng nhập', email: '', branch: 'office', roleTitle: 'Khách sử dụng',
     };
   });
   const [showLoginModal, setShowLoginModal] = useState(false);
@@ -191,7 +184,9 @@ export default function App() {
   };
 
   const handleLogout = async () => {
-    await logOutFirebase();
+    const token = localStorage.getItem('applet_auth_token');
+    await fetch('/api/auth/logout', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {} });
+    await logOutFirebase().catch(console.error);
     localStorage.removeItem('applet_auth_token');
     localStorage.removeItem('applet_auth_user');
     localStorage.removeItem('excel_ai_agent_user');

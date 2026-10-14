@@ -34,10 +34,13 @@ export interface VietQrOptions {
 }
 
 export function buildVietQrPayload(options: VietQrOptions): string {
-  const bin = (options.bankBin || '970415').replace(/\D/g, '').padStart(6, '0').slice(0, 6);
+  const bin = (options.bankBin || '').trim();
+  if (!/^\d{6}$/.test(bin)) throw new Error('BIN ngân hàng phải gồm 6 chữ số.');
   const accountNo = (options.accountNo || '').trim();
+  if (!/^[A-Za-z0-9]{1,34}$/.test(accountNo)) throw new Error('Số tài khoản không hợp lệ.');
+  if (options.amount !== undefined && (!Number.isFinite(options.amount) || options.amount < 0)) throw new Error('Số tiền không hợp lệ.');
   const amount = options.amount && options.amount > 0 ? Math.round(options.amount) : 0;
-  const rawMsg = (options.message || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').slice(0, 50);
+  const rawMsg = (options.message || '').trim().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/đ/g, 'd').replace(/Đ/g, 'D').replace(/[^\x20-\x7E]/g, '').slice(0, 50);
 
   // Merchant Account Information: Tag 38
   // Sub-tag 00: GUID "A000000727"

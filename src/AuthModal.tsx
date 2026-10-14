@@ -60,29 +60,7 @@ export function AuthModal({
       const stored = localStorage.getItem('applet_registered_accounts');
       if (stored) return JSON.parse(stored);
     } catch {}
-    return [
-      {
-        name: 'Nguyễn Trường Thiên Tân',
-        email: 'ntrthientan@gmail.com',
-        phone: '0817221722',
-        roleTitle: 'Tác Giả & Quản Trị Hệ Thống',
-        branch: 'all',
-      },
-      {
-        name: 'Nguyễn Thùy Linh',
-        email: 'thuy.linh@vietfintech.vn',
-        phone: '0988111222',
-        roleTitle: 'Kế toán trưởng & QL Vận hành',
-        branch: 'office',
-      },
-      {
-        name: 'Trần Minh Đức',
-        email: 'duc.tran@vietcombank.com.vn',
-        phone: '0977222333',
-        roleTitle: 'Chuyên viên Tín dụng & QLRR',
-        branch: 'banking',
-      },
-    ];
+    return [];
   });
 
   const handleBranchSelect = (b: BusinessBranch) => {
@@ -98,7 +76,7 @@ export function AuthModal({
 
   const handleQuickSelectAccount = (acc: any) => {
     setLoginIdentifier(acc.email || acc.phone);
-    setLoginPassword('password123');
+    setLoginPassword('');
     setErrorMessage(null);
     setSuccessMessage(`Đã chọn tài khoản: ${acc.name}`);
   };
@@ -469,7 +447,7 @@ export function AuthModal({
                   <label className="text-slate-300 font-semibold">
                     Mật khẩu / Mã PIN bảo mật <span className="text-emerald-400">*</span>
                   </label>
-                  <span className="text-[10px] text-slate-500">Mặc định tài khoản thử: password123</span>
+
                 </div>
                 <div className="relative">
                   <input

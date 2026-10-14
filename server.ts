@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import express from 'express';
+import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
@@ -44,7 +46,7 @@ const __dirname = path.dirname(__filename);
 export function parseNumeric(val: any, fallback: number): number {
   if (val === undefined || val === null || val === '') return fallback;
   const num = Number(val);
-  return isNaN(num) ? fallback : num;
+  return Number.isFinite(num) ? num : fallback;
 }
 
 const app = express();
@@ -56,29 +58,60 @@ app.use(express.urlencoded({ extended: true }));
 // Multer storage in memory
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 30 * 1024 * 1024 }, // 30MB
+  limits: { fileSize: 30 * 1024 * 1024, files: 10, fields: 100, parts: 110 }, // 30MB
+});
+
+const requestOwner = new AsyncLocalStorage<string>();
+app.use('/api', (req, res, next) => {
+  const cookie = /(?:^|;\s*)verifin_workspace=([a-f0-9]{64})(?:;|$)/.exec(req.headers.cookie || '');
+  const owner = cookie?.[1] || randomBytes(32).toString('hex');
+  if (!cookie) res.cookie('verifin_workspace', owner, { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: 86400000 });
+  res.setHeader('Cache-Control', 'no-store');
+  requestOwner.run(owner, next);
 });
 
 // Cache for generated download files
-const downloadCache = new Map<string, { buffer: Buffer; filename: string; contentType: string; createdAt: number }>();
+const downloadCache = new Map<string, { buffer: Buffer; filename: string; contentType: string; createdAt: number; owner: string }>();
 
 function storeDownload(
   buffer: Buffer,
   filename: string,
   contentType: string = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
 ): string {
-  const id = `file_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-  downloadCache.set(id, { buffer, filename, contentType, createdAt: Date.now() });
+  const id = randomUUID();
+  downloadCache.set(id, { buffer, filename, contentType, createdAt: Date.now(), owner: requestOwner.getStore()! });
   // Evict older files if cache grows too large (> 1000 items)
   if (downloadCache.size > 1000) {
     const oldestKey = downloadCache.keys().next().value;
     if (oldestKey) downloadCache.delete(oldestKey);
   }
+  trimCaches();
   return id;
 }
 
 // Temporary store for 2-step Reconcile files
-const reconcileUploads = new Map<string, { fileA: Buffer; fileB: Buffer; nameA: string; nameB: string }>();
+const reconcileUploads = new Map<string, { fileA: Buffer; fileB: Buffer; nameA: string; nameB: string; owner: string; createdAt: number }>();
+
+// Expire sensitive buffers and bound total memory, including abandoned previews.
+setInterval(() => {
+  const cutoff = Date.now() - 30 * 60 * 1000;
+  for (const [id, file] of downloadCache) if (file.createdAt < cutoff) downloadCache.delete(id);
+  for (const [id, file] of reconcileUploads) if (file.createdAt < cutoff) reconcileUploads.delete(id);
+}, 60_000).unref();
+function trimCaches() {
+  let size = [...downloadCache.values()].reduce((n, f) => n + f.buffer.length, 0) + [...reconcileUploads.values()].reduce((n, f) => n + f.fileA.length + f.fileB.length, 0);
+  while (size > 256 * 1024 * 1024 && downloadCache.size) {
+    const id = downloadCache.keys().next().value!;
+    size -= downloadCache.get(id)!.buffer.length;
+    downloadCache.delete(id);
+  }
+  while (size > 256 * 1024 * 1024 && reconcileUploads.size) {
+    const id = reconcileUploads.keys().next().value!;
+    const file = reconcileUploads.get(id)!;
+    size -= file.fileA.length + file.fileB.length;
+    reconcileUploads.delete(id);
+  }
+}
 
 // ==========================================
 // SAMPLE DATASETS
@@ -139,7 +172,9 @@ app.get('/api/samples/:name', async (req, res) => {
 // ==========================================
 app.get('/api/download/:fileId', (req, res) => {
   const file = downloadCache.get(req.params.fileId);
-  if (!file) {
+  if (file && file.owner !== requestOwner.getStore()) return res.status(404).json({ error: 'File không tồn tại.' });
+  if (!file || Date.now() - file.createdAt > 30 * 60 * 1000) {
+    downloadCache.delete(req.params.fileId);
     return res.status(404).json({ error: 'File tải về không tồn tại hoặc đã hết hạn.' });
   }
   res.setHeader('Content-Type', file.contentType);
@@ -206,38 +241,43 @@ export interface BankAccountConfig {
   updatedAt?: string;
 }
 
-let activeBankAccount: BankAccountConfig = {
-  companyName: 'CÔNG TY CỔ PHẦN CÔNG NGHỆ VÀ THƯƠNG MẠI ÁNH DƯƠNG',
-  bankName: 'VietinBank (Ngân hàng TMCP Công Thương Việt Nam)',
-  bankBin: '970415',
-  accountNo: '102868889999',
-  accountName: 'CONG TY CP CONG NGHE & THUONG MAI ANH DUONG',
-  transferSyntax: '[MA_KH] THANH TOAN CONG NO NGAY DD/MM/YYYY',
-  hotline: '1900 6868 - 0988 123 456',
-  updatedAt: new Date().toISOString(),
-};
+const dataDir = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
+fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+function saveState(filename: string, value: unknown) {
+  const target = path.join(dataDir, filename);
+  fs.writeFileSync(target + '.tmp', JSON.stringify(value), { mode: 0o600 });
+  fs.renameSync(target + '.tmp', target);
+}
+function loadState<T>(filename: string, fallback: T): T {
+  const target = path.join(dataDir, filename);
+  return fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, 'utf8')) : fallback;
+}
+let activeBankAccount = loadState<BankAccountConfig>('bank-account.json', {
+  companyName: '', bankName: '', bankBin: '', accountNo: '', accountName: '',
+  transferSyntax: '[MA_KH] THANH TOAN CONG NO NGAY DD/MM/YYYY', hotline: '',
+});
 
 // Session store: token -> { userId, expiresAt }
 const activeSessions = new Map<string, { userId: string; expiresAt: number }>();
 
-// Seed default initial session for author
-const creatorToken = 'jwt_auth_creator_' + Date.now().toString(36);
-activeSessions.set(creatorToken, {
-  userId: 'usr_creator',
-  expiresAt: Date.now() + 30 * 24 * 3600 * 1000,
-});
-
-function getAuthenticatedUser(req: express.Request): UserAccountRecord | null {
-  const authHeader = req.headers.authorization;
-  if (!authHeader) return null;
-  const token = authHeader.replace(/^Bearer\s+/i, '').trim();
-  if (!token || !activeSessions.has(token)) return null;
-  const session = activeSessions.get(token)!;
-  if (session.expiresAt < Date.now()) {
-    activeSessions.delete(token);
-    return null;
+async function getAuthenticatedUser(req: express.Request): Promise<UserAccountRecord | null> {
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+  if (!token) return null;
+  const session = activeSessions.get(token);
+  if (session) {
+    if (session.expiresAt < Date.now()) { activeSessions.delete(token); return null; }
+    return registeredUsers.find(u => u.id === session.userId) || null;
   }
-  return registeredUsers.find((u) => u.id === session.userId) || null;
+  // Verify Firebase signature, issuer, audience and expiry on the server.
+  if (!process.env.FIREBASE_PROJECT_ID) return null;
+  try {
+    const { initializeApp, getApps } = await import('firebase-admin/app');
+    const { getAuth } = await import('firebase-admin/auth');
+    const firebaseApp = getApps()[0] || initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID });
+    const decoded = await getAuth(firebaseApp).verifyIdToken(token);
+    if (!decoded.email || !decoded.email_verified) return null;
+    return { id: decoded.uid, name: decoded.name || decoded.email, email: decoded.email, password: '', branch: 'all', roleTitle: 'Google', createdAt: '' };
+  } catch { return null; }
 }
 
 // API Lấy thông tin tài khoản thụ hưởng để trích xuất khi tạo QR
@@ -246,17 +286,24 @@ app.get('/api/settings/bank-account', (_req, res) => {
 });
 
 // API Cập nhật tài khoản thụ hưởng (bảo mật: yêu cầu phiên đăng nhập)
-app.post('/api/settings/bank-account', (req, res) => {
+app.post('/api/settings/bank-account', async (req, res) => {
   try {
-    const user = getAuthenticatedUser(req);
+    const user = await getAuthenticatedUser(req);
     if (!user) {
       return res.status(401).json({
         error: 'Vui lòng đăng nhập với tài khoản Quản trị / Kế toán để có quyền cập nhật tài khoản thụ hưởng doanh nghiệp.',
       });
     }
 
+    const admins = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+    if (!admins.includes(user.email.toLowerCase())) return res.status(403).json({ error: 'Chỉ quản trị được cấu hình trong ADMIN_EMAILS có quyền đổi tài khoản thụ hưởng.' });
     const body = req.body || {};
-    activeBankAccount = {
+    if (typeof body.bankBin !== 'string' || !/^\d{6}$/.test(body.bankBin) ||
+        typeof body.accountNo !== 'string' || !/^[A-Za-z0-9]{1,34}$/.test(body.accountNo.trim()) ||
+        typeof body.accountName !== 'string' || !body.accountName.trim()) {
+      return res.status(400).json({ error: 'BIN, số tài khoản hoặc tên người thụ hưởng không hợp lệ.' });
+    }
+    const nextBankAccount: BankAccountConfig = {
       ...activeBankAccount,
       companyName: body.companyName || activeBankAccount.companyName,
       bankName: body.bankName || activeBankAccount.bankName,
@@ -267,6 +314,8 @@ app.post('/api/settings/bank-account', (req, res) => {
       hotline: body.hotline || activeBankAccount.hotline,
       updatedAt: new Date().toISOString(),
     };
+    saveState('bank-account.json', nextBankAccount);
+    activeBankAccount = nextBankAccount;
     return res.json({ success: true, message: 'Đã lưu cấu hình tài khoản VietQR', account: activeBankAccount });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Lỗi khi cập nhật cấu hình tài khoản' });
@@ -288,56 +337,45 @@ export interface UserAccountRecord {
 }
 
 // In-memory store for registered users
-const registeredUsers: UserAccountRecord[] = [
-  {
-    id: 'usr_creator',
-    name: 'Nguyễn Trường Thiên Tân',
-    email: 'ntrthientan@gmail.com',
-    phone: '0817221722',
-    password: 'password123',
-    branch: 'all',
-    roleTitle: 'Tác Giả & Quản Trị Hệ Thống',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'usr_thuy_linh',
-    name: 'Nguyễn Thùy Linh',
-    email: 'thuy.linh@vietfintech.vn',
-    phone: '0988111222',
-    password: 'password123',
-    branch: 'office',
-    roleTitle: 'Kế toán trưởng & QL Vận hành',
-    createdAt: new Date().toISOString(),
-  },
-  {
-    id: 'usr_minh_duc',
-    name: 'Trần Minh Đức',
-    email: 'duc.tran@vietcombank.com.vn',
-    phone: '0977222333',
-    password: 'password123',
-    branch: 'banking',
-    roleTitle: 'Chuyên viên Tín dụng & QLRR',
-    createdAt: new Date().toISOString(),
-  },
-];
+const registeredUsers = loadState<UserAccountRecord[]>('users.json', []);
+function hashPassword(password: string): string {
+  const salt = randomBytes(16).toString('hex');
+  return salt + ':' + scryptSync(password, salt, 64).toString('hex');
+}
+function verifyPassword(password: string, stored: string): boolean {
+  const [salt, hash] = stored.split(':');
+  if (!salt || !hash) return false;
+  const expected = Buffer.from(hash, 'hex');
+  const actual = scryptSync(password, salt, 64);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+
+// Provision the administrator out of band; public registration cannot claim this identity.
+const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+if (adminEmails[0] && process.env.ADMIN_PASSWORD && !registeredUsers.some(u => u.email === adminEmails[0])) {
+  if (process.env.ADMIN_PASSWORD.length < 12) throw new Error('ADMIN_PASSWORD phải có ít nhất 12 ký tự.');
+  registeredUsers.push({ id: randomUUID(), name: 'Quản trị', email: adminEmails[0], password: hashPassword(process.env.ADMIN_PASSWORD), branch: 'all', roleTitle: 'Quản trị hệ thống', createdAt: new Date().toISOString() });
+  saveState('users.json', registeredUsers);
+}
 
 // 1. API Đăng Ký Tài Khoản Mới
 app.post('/api/auth/register', (req, res) => {
   try {
     const { name, email, phone, password, branch, roleTitle } = req.body || {};
     
-    if (!name || !name.trim()) {
+    if (typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({ error: 'Vui lòng nhập họ và tên của bạn.' });
     }
-    if (!email || !email.trim() || !email.includes('@')) {
+    if (typeof email !== 'string' || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
       return res.status(400).json({ error: 'Vui lòng nhập địa chỉ email hợp lệ.' });
     }
-    if (!password || password.length < 6) {
+    if (typeof password !== 'string' || password.length < 6 || password.length > 256) {
       return res.status(400).json({ error: 'Mật khẩu phải có tối thiểu 6 ký tự để đảm bảo bảo mật.' });
     }
 
     const cleanEmail = email.trim().toLowerCase();
-    const cleanPhone = phone ? phone.trim() : '';
+    if (adminEmails.includes(cleanEmail)) return res.status(403).json({ error: 'Email dành cho quản trị. Liên hệ người vận hành hệ thống.' });
+    const cleanPhone = typeof phone === 'string' ? phone.trim() : '';
 
     // Check existing
     const existing = registeredUsers.find(
@@ -350,19 +388,20 @@ app.post('/api/auth/register', (req, res) => {
     }
 
     const newUser: UserAccountRecord = {
-      id: 'usr_' + Date.now().toString(36),
+      id: randomUUID(),
       name: name.trim(),
       email: cleanEmail,
       phone: cleanPhone,
-      password: String(password),
+      password: hashPassword(password),
       branch: branch === 'banking' ? 'banking' : branch === 'office' ? 'office' : 'all',
-      roleTitle: (roleTitle && roleTitle.trim()) || (branch === 'banking' ? 'Chuyên viên Ngân Hàng' : branch === 'office' ? 'Kế toán & Hành chính' : 'Quản Lý Điều Hành'),
+      roleTitle: (typeof roleTitle === 'string' && roleTitle.trim()) || (branch === 'banking' ? 'Chuyên viên Ngân Hàng' : branch === 'office' ? 'Kế toán & Hành chính' : 'Quản Lý Điều Hành'),
       createdAt: new Date().toISOString(),
     };
 
+    saveState('users.json', [...registeredUsers, newUser]);
     registeredUsers.push(newUser);
 
-    const token = 'jwt_auth_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
+    const token = randomBytes(32).toString('hex');
     activeSessions.set(token, {
       userId: newUser.id,
       expiresAt: Date.now() + 7 * 24 * 3600 * 1000,
@@ -393,7 +432,9 @@ app.post('/api/auth/register', (req, res) => {
 app.post('/api/auth/login', (req, res) => {
   try {
     const { emailOrPhone, email, phone, password } = req.body || {};
-    const inputIdentifier = (emailOrPhone || email || phone || '').trim().toLowerCase();
+    const identifier = emailOrPhone || email || phone || '';
+    if (typeof identifier !== 'string' || typeof password !== 'string' || password.length > 256) return res.status(400).json({ error: 'Thông tin đăng nhập không hợp lệ.' });
+    const inputIdentifier = identifier.trim().toLowerCase();
     const inputPass = String(password || '');
 
     if (!inputIdentifier) {
@@ -411,13 +452,13 @@ app.post('/api/auth/login', (req, res) => {
     );
 
     if (matched) {
-      if (matched.password !== inputPass) {
+      if (!verifyPassword(inputPass, matched.password)) {
         return res.status(401).json({
           error: 'Mật khẩu không chính xác. Vui lòng kiểm tra lại.',
         });
       }
 
-      const token = 'jwt_auth_' + Date.now().toString(36) + '_' + Math.random().toString(36).substring(2, 10);
+      const token = randomBytes(32).toString('hex');
       activeSessions.set(token, {
         userId: matched.id,
         expiresAt: Date.now() + 7 * 24 * 3600 * 1000,
@@ -440,8 +481,8 @@ app.post('/api/auth/login', (req, res) => {
       });
     }
 
-    return res.status(404).json({
-      error: 'Tài khoản chưa tồn tại trong hệ thống. Vui lòng bấm vào tab "Đăng Ký Tài Khoản Mới" để tạo tài khoản.',
+    return res.status(401).json({
+      error: 'Thông tin đăng nhập không chính xác.',
     });
   } catch (err: any) {
     return res.status(500).json({ error: err.message || 'Lỗi xác thực đăng nhập' });
@@ -449,8 +490,8 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 // 3. API Lấy thông tin tài khoản đang đăng nhập (Kiểm tra token thực tế)
-app.get('/api/auth/me', (req, res) => {
-  const user = getAuthenticatedUser(req);
+app.get('/api/auth/me', async (req, res) => {
+  const user = await getAuthenticatedUser(req);
   if (!user) {
     return res.json({
       authenticated: false,
@@ -591,14 +632,17 @@ app.post(
       }
 
       const preview = getReconcilePreview(bufA, bufB);
-      const sessionId = `rec_${Date.now()}`;
+      const sessionId = randomUUID();
       reconcileUploads.set(sessionId, {
+        owner: requestOwner.getStore()!,
+        createdAt: Date.now(),
         fileA: bufA,
         fileB: bufB,
         nameA: files?.['file_a']?.[0]?.originalname || 'File_A.xlsx',
         nameB: files?.['file_b']?.[0]?.originalname || 'File_B.xlsx',
       });
 
+      trimCaches();
       return res.json({
         ...preview,
         session_id: sessionId,
@@ -615,15 +659,7 @@ app.post('/api/reconcile/run', upload.none(), async (req, res) => {
     const { session_id, key_a, key_b, val_a, val_b } = req.body;
     let cached = reconcileUploads.get(session_id);
 
-    if (!cached) {
-      // Use sample if no active session
-      cached = {
-        fileA: getSampleReconcileA(),
-        fileB: getSampleReconcileB(),
-        nameA: 'File_A_Sample.xlsx',
-        nameB: 'File_B_Sample.xlsx',
-      };
-    }
+    if (!cached || cached.owner !== requestOwner.getStore() || Date.now() - cached.createdAt > 30 * 60 * 1000) return res.status(404).json({ error: 'Phiên đối soát không tồn tại. Vui lòng tải lại hai file.' });
 
     const result = await runReconcileProcess(
       cached.fileA,
@@ -836,7 +872,7 @@ app.post('/api/bank/statement-analyze', upload.single('statement_file'), async (
       return res.status(400).json({ error: 'Vui lòng tải lên file sao kê ngân hàng.' });
     }
 
-    const proposedPayment = Number(req.body.proposed_payment) || 15000000;
+    const proposedPayment = parseNumeric(req.body.proposed_payment, 15000000);
     const result = await analyzeBankStatementLogic(stmtBuffer, proposedPayment);
 
     const fileId = storeDownload(result.excelBuffer, 'Bao_Cao_Tham_Dinh_Sao_Ke_AI.xlsx');
@@ -864,7 +900,7 @@ app.post('/api/bank/statement-analyze', upload.single('statement_file'), async (
 app.post('/api/bank/cic-bctc-extract', upload.array('files'), async (req, res) => {
   try {
     const docType = (req.body.doc_type || 'cic') as 'cic' | 'bctc';
-    const customerIncome = Number(req.body.customer_income) || 50000000;
+    const customerIncome = parseNumeric(req.body.customer_income, 50000000);
 
     const files = (req.files as Express.Multer.File[]) || [];
     const filePayloads = files.map(f => ({
@@ -1040,22 +1076,22 @@ app.post('/api/bank/income-assessment', upload.none(), async (req, res) => {
     const useSample = req.body.use_sample === 'true' || req.body.use_sample === true;
     let params: any;
 
-    if (useSample || !req.body.incomes) {
+    if (useSample) {
       params = getSampleIncomeAssessmentData();
     } else {
       const parsedIncomes =
         typeof req.body.incomes === 'string' ? JSON.parse(req.body.incomes) : req.body.incomes;
       params = {
         customerName: req.body.customer_name || 'Nguyễn Hoàng Nam & Lê Thị Thảo',
-        borrowerAge: Number(req.body.borrower_age) || 38,
+        borrowerAge: parseNumeric(req.body.borrower_age, 38),
         coBorrowerAge: req.body.co_borrower_age ? Number(req.body.co_borrower_age) : undefined,
-        dependentsCount: Number(req.body.dependents_count) || 2,
-        livingCostBorrower: Number(req.body.living_cost_borrower) || 12000000,
-        livingCostCoBorrower: Number(req.body.living_cost_co_borrower) || 10000000,
-        livingCostPerDependent: Number(req.body.living_cost_per_dependent) || 5000000,
-        existingMonthlyDebt: Number(req.body.existing_monthly_debt) || 15000000,
-        newLoanTenureMonths: Number(req.body.new_loan_tenure_months) || 60,
-        newLoanInterestYear: Number(req.body.new_loan_interest_year) || 8.5,
+        dependentsCount: parseNumeric(req.body.dependents_count, 2),
+        livingCostBorrower: parseNumeric(req.body.living_cost_borrower, 12000000),
+        livingCostCoBorrower: parseNumeric(req.body.living_cost_co_borrower, 10000000),
+        livingCostPerDependent: parseNumeric(req.body.living_cost_per_dependent, 5000000),
+        existingMonthlyDebt: parseNumeric(req.body.existing_monthly_debt, 15000000),
+        newLoanTenureMonths: parseNumeric(req.body.new_loan_tenure_months, 60),
+        newLoanInterestYear: parseNumeric(req.body.new_loan_interest_year, 8.5),
         incomes: parsedIncomes,
       };
     }
@@ -1082,7 +1118,7 @@ app.post('/api/office/cashflow-forecast', upload.none(), async (req, res) => {
     const useSample = req.body.use_sample === 'true' || req.body.use_sample === true;
     let params: any;
 
-    if (useSample || !req.body.weekly_data) {
+    if (useSample) {
       params = getSampleCashFlowData();
     } else {
       const parsedWeeks =
@@ -1090,8 +1126,8 @@ app.post('/api/office/cashflow-forecast', upload.none(), async (req, res) => {
           ? JSON.parse(req.body.weekly_data)
           : req.body.weekly_data;
       params = {
-        initialCash: Number(req.body.initial_cash) || 950000000,
-        safetyThreshold: Number(req.body.safety_threshold) || 200000000,
+        initialCash: parseNumeric(req.body.initial_cash, 950000000),
+        safetyThreshold: parseNumeric(req.body.safety_threshold, 200000000),
         weeklyData: parsedWeeks,
       };
     }
@@ -1135,6 +1171,12 @@ app.post('/api/chat/message', async (req, res) => {
 // ==========================================
 // FRONTEND STATIC / VITE INTEGRATION
 // ==========================================
+app.use('/api', (_req, res) => res.status(404).json({ error: 'API không tồn tại.' }));
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const status = err instanceof multer.MulterError ? (err.code === 'LIMIT_FILE_SIZE' ? 413 : 400) : (err.status || 500);
+  res.status(status).json({ error: status === 500 ? 'Lỗi máy chủ.' : err.message });
+});
+
 async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
 
