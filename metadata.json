@@ -1,0 +1,8 @@
+{
+  "name": "VeriFin Pro - Banking & Office AI Agent",
+  "description": "Hệ thống AI xử lý nghiệp vụ tài chính, kế toán công nợ & thẩm định ngân hàng chuyên sâu theo tiêu chuẩn Việt Nam: Đối chiếu công nợ VietQR, ghép 2 file, phiếu lương, OCR đơn hàng Zalo & chứng từ, thẩm định sao kê & Red Flags, CIC & BCTC, dự báo dòng tiền.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

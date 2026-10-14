@@ -1,0 +1,212 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile information authenticated via Firebase Google Sign-In",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "Firebase Auth UID"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User full name"
+        },
+        "photoURL": {
+          "type": "string",
+          "description": "Avatar photo URL"
+        },
+        "branch": {
+          "type": "string",
+          "description": "Business branch: office, banking, or all",
+          "enum": ["office", "banking", "all"]
+        },
+        "roleTitle": {
+          "type": "string",
+          "description": "User job title or role"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "ISO timestamp of account creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp of last update"
+        }
+      },
+      "required": ["userId", "email"]
+    },
+    "CompanyBankConfig": {
+      "title": "CompanyBankConfig",
+      "description": "User or company bank account receiving configuration for VietQR Napas",
+      "type": "object",
+      "properties": {
+        "companyName": {
+          "type": "string",
+          "description": "Company name"
+        },
+        "bankName": {
+          "type": "string",
+          "description": "Bank name"
+        },
+        "bankBin": {
+          "type": "string",
+          "description": "Bank 6-digit BIN code"
+        },
+        "accountNo": {
+          "type": "string",
+          "description": "Beneficiary account number"
+        },
+        "accountName": {
+          "type": "string",
+          "description": "Beneficiary account holder name"
+        },
+        "transferSyntax": {
+          "type": "string",
+          "description": "Transfer description syntax"
+        },
+        "hotline": {
+          "type": "string",
+          "description": "Support hotline phone number"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "ISO timestamp"
+        }
+      },
+      "required": ["accountNo", "bankBin"]
+    },
+    "DebtRecord": {
+      "title": "DebtRecord",
+      "description": "Customer debt record stored for aging and recovery tracking",
+      "type": "object",
+      "properties": {
+        "customerId": {
+          "type": "string",
+          "description": "Customer ID code"
+        },
+        "customerName": {
+          "type": "string",
+          "description": "Customer company or individual name"
+        },
+        "total": {
+          "type": "number",
+          "description": "Total original invoice debt"
+        },
+        "paid": {
+          "type": "number",
+          "description": "Amount already paid"
+        },
+        "remain": {
+          "type": "number",
+          "description": "Remaining debt amount"
+        },
+        "due": {
+          "type": "string",
+          "description": "Due date"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        }
+      },
+      "required": ["customerId", "customerName", "remain"]
+    },
+    "ChatSession": {
+      "title": "ChatSession",
+      "description": "Conversation session with the Gemini AI Financial & Banking Advisor",
+      "type": "object",
+      "properties": {
+        "sessionId": {
+          "type": "string",
+          "description": "Session unique ID"
+        },
+        "title": {
+          "type": "string",
+          "description": "Topic or title of conversation"
+        },
+        "role": {
+          "type": "string",
+          "description": "Chatbot persona/role",
+          "enum": ["credit_expert", "accounting_advisor", "quick_assistant"]
+        },
+        "modelUsed": {
+          "type": "string",
+          "description": "Model alias used (gemini-4-argon, gemini-3.8-flash, gemini-3.1-flash-lite)",
+          "enum": ["gemini-4-argon", "gemini-3.8-flash", "gemini-3.1-flash-lite"]
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp"
+        },
+        "updatedAt": {
+          "type": "string",
+          "description": "Last message timestamp"
+        }
+      },
+      "required": ["sessionId", "title", "role"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Single message in a multi-turn chat thread",
+      "type": "object",
+      "properties": {
+        "role": {
+          "type": "string",
+          "description": "Sender role",
+          "enum": ["user", "model"]
+        },
+        "content": {
+          "type": "string",
+          "description": "Message content in markdown/text"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Message timestamp"
+        },
+        "modelUsed": {
+          "type": "string",
+          "description": "Model used for generating this response"
+        }
+      },
+      "required": ["role", "content", "timestamp"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": {
+        "$ref": "UserProfile"
+      },
+      "description": "Stores user profile and preferences"
+    },
+    "/users/{userId}/settings/{settingId}": {
+      "schema": {
+        "$ref": "CompanyBankConfig"
+      },
+      "description": "Stores user's verified company bank configuration"
+    },
+    "/users/{userId}/debts/{debtId}": {
+      "schema": {
+        "$ref": "DebtRecord"
+      },
+      "description": "Stores user's tracked debt items"
+    },
+    "/users/{userId}/chatSessions/{sessionId}": {
+      "schema": {
+        "$ref": "ChatSession"
+      },
+      "description": "Stores Gemini multi-turn chat conversation threads"
+    },
+    "/users/{userId}/chatSessions/{sessionId}/messages/{messageId}": {
+      "schema": {
+        "$ref": "ChatMessage"
+      },
+      "description": "Stores individual messages inside a conversation session"
+    }
+  }
+}
