@@ -22,11 +22,12 @@ import {
   ArrowRight,
   LogOut,
 } from 'lucide-react';
-import { BusinessBranch, UserSession } from './App';
+import type { BusinessBranch, UserSession } from './App';
 
 interface AuthModalProps {
   currentUser: UserSession;
-  onAuthSuccess: (user: UserSession) => void;
+  onAuthSuccess: (user: UserSession) => void | Promise<void>;
+  requiredAuth?: boolean;
   onClose: () => void;
   initialMode?: 'login' | 'register';
 }
@@ -36,6 +37,7 @@ export function AuthModal({
   onAuthSuccess,
   onClose,
   initialMode = 'login',
+  requiredAuth = false,
 }: AuthModalProps) {
   const [mode, setMode] = useState<'login' | 'register'>(initialMode);
   const [loading, setLoading] = useState(false);
@@ -101,16 +103,10 @@ export function AuthModal({
         token,
         loginAt: new Date().toISOString(),
       };
-      try {
-        localStorage.setItem('applet_auth_user', JSON.stringify(verifiedUser));
-        localStorage.setItem('applet_auth_token', token);
-      } catch {}
 
-      setSuccessMessage('Đăng nhập Google (Firebase Auth) thành công!');
-      setTimeout(() => {
-        onAuthSuccess(verifiedUser);
-        onClose();
-      }, 500);
+      setSuccessMessage('Đang xác thực phiên Google với máy chủ…');
+      await onAuthSuccess(verifiedUser);
+      onClose();
     } catch (err: any) {
       console.error('Google Sign-In error:', redactSensitiveLog(err));
       setErrorMessage(err.message || 'Lỗi khi đăng nhập bằng Google.');
@@ -152,18 +148,10 @@ export function AuthModal({
       };
 
       // Save user session and token
-      try {
-        localStorage.setItem('applet_auth_user', JSON.stringify(verifiedUser));
-        if (verifiedUser.token) {
-          localStorage.setItem('applet_auth_token', verifiedUser.token);
-        }
-      } catch {}
 
-      setSuccessMessage('Đăng nhập và xác thực thành công!');
-      setTimeout(() => {
-        onAuthSuccess(verifiedUser);
-        onClose();
-      }, 500);
+      setSuccessMessage('Đang xác thực phiên tài khoản với máy chủ…');
+      await onAuthSuccess(verifiedUser);
+      onClose();
     } catch (err: any) {
       setErrorMessage(err.message || 'Lỗi kết nối máy chủ xác thực.');
     } finally {
@@ -243,17 +231,11 @@ export function AuthModal({
       setSavedAccounts(updatedAccounts);
       try {
         localStorage.setItem('applet_registered_accounts', JSON.stringify(updatedAccounts));
-        localStorage.setItem('applet_auth_user', JSON.stringify(verifiedUser));
-        if (verifiedUser.token) {
-          localStorage.setItem('applet_auth_token', verifiedUser.token);
-        }
       } catch {}
 
-      setSuccessMessage('Đăng ký tài khoản thành công! Đang kích hoạt phân hệ...');
-      setTimeout(() => {
-        onAuthSuccess(verifiedUser);
-        onClose();
-      }, 700);
+      setSuccessMessage('Đã tạo tài khoản. Đang xác thực phiên với máy chủ…');
+      await onAuthSuccess(verifiedUser);
+      onClose();
     } catch (err: any) {
       setErrorMessage(err.message || 'Lỗi đăng ký tài khoản.');
     } finally {
@@ -281,6 +263,7 @@ export function AuthModal({
           </div>
           <button
             onClick={onClose}
+            hidden={requiredAuth}
             className="p-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-400 hover:text-white transition"
           >
             <X className="w-5 h-5" />
@@ -485,6 +468,7 @@ export function AuthModal({
                   <button
                     type="button"
                     onClick={onClose}
+            hidden={requiredAuth}
                     className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-semibold transition"
                   >
                     Hủy bỏ
@@ -709,6 +693,7 @@ export function AuthModal({
                   <button
                     type="button"
                     onClick={onClose}
+            hidden={requiredAuth}
                     className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white font-semibold transition"
                   >
                     Hủy bỏ

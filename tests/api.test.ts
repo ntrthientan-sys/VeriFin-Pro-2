@@ -1,3 +1,4 @@
+import { createMockOperationsState } from '../src/data/inventoryOrderMockData';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -20,6 +21,9 @@ test('HTTP: authentication, beneficiary permissions, private exports, zero value
       cookie = response.headers.get('set-cookie')?.split(';')[0] || cookie;
       return response;
     }
+    const opOrder=createMockOperationsState().orders.find(o=>o.fulfillmentStatus==='DELIVERED'&&o.paidAmount<o.grandTotalAmount)!;
+    assert.equal((await request('/api/operations/qr',opOrder)).status,400);
+    assert.equal((await request('/api/operations/advisory',{})).status,401);
     let response = await request('/api/auth/register', { name: 'Test', email: 'user@example.test', password: 'Secret123' });
     assert.equal(response.status, 201);
     const token = (await response.json()).user.token;
@@ -31,6 +35,14 @@ test('HTTP: authentication, beneficiary permissions, private exports, zero value
     const admin = (await response.json()).user.token;
     response = await request('/api/settings/bank-account', { bankBin: '970448', accountNo: '48888', accountName: 'TEST' }, admin);
     assert.equal(response.status, 200);
+    const orderQr=await request('/api/operations/qr',opOrder);
+    assert.equal(orderQr.status,200);
+    const qrData=await orderQr.json();
+    assert.equal(qrData.bankConfig.accountNo,'48888');
+    assert.equal(qrData.amountToCollect,opOrder.grandTotalAmount-opOrder.paidAmount);
+    assert.match(qrData.qrImageUrl,/^data:image\/png;base64,/);
+    assert.equal((await request('/api/operations/qr',{...opOrder,accountNo:'ATTACKER'})).status,400);
+    assert.equal((await request('/api/operations/qr',{...opOrder,paidAmount:opOrder.grandTotalAmount,paymentStatus:'PAID'})).status,400);
     response = await request('/api/debt/pdf?kh_id=KH1&name=Test&total=100&remain=100');
     assert.equal(response.status, 200);
     assert.match(response.headers.get('content-type')!, /pdf/);

@@ -4,6 +4,7 @@ import {
 } from "./apiKeyManager";
 import { redactSensitiveLog } from "../utils/redaction";
 const protectedPaths = new Set([
+  "/api/operations/advisory",
   "/api/ai/extract-batch",
   "/api/bank/cic-bctc-extract",
   "/api/bank/collateral-ltv",

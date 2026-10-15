@@ -464,7 +464,19 @@ export const OperationsEvidenceSchema = z
         evidenceRefs: z.array(z.string()).min(1),
       })
       .strict(),
-    inferences: z.array(z.never()),
+    inferences: z
+      .array(
+        z
+          .object({
+            id: OperationsIdSchema,
+            statement: z.string().min(1),
+            evidenceRefs: z.array(z.string()).min(1),
+            sourceMode: z.enum(["GEMINI_BYOK_LIVE", "DETERMINISTIC_FALLBACK"]),
+            reviewStatus: z.literal("UNREVIEWED"),
+          })
+          .strict(),
+      )
+      .max(100),
     unknowns: z.array(UnknownSchema),
   })
   .strict();
