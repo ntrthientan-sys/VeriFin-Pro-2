@@ -1,3 +1,5 @@
+import { redactSensitiveLog } from './utils/redaction';
+import { apiFetch as fetch } from './services/apiClient';
 import React, { useState, useEffect } from 'react';
 import {
   CreditCard,
@@ -164,7 +166,7 @@ export function BankAccountConfigModule({
       if (onSaved) onSaved(updated);
       setTimeout(() => setSavedSuccess(false), 3500);
     } catch (err: any) {
-      console.error('Error saving bank account:', err);
+      console.error('Error saving bank account:', redactSensitiveLog(err));
       setSaveError(err.message || 'Lỗi khi lưu cấu hình tài khoản.');
       setTimeout(() => setSaveError(null), 5000);
     } finally {

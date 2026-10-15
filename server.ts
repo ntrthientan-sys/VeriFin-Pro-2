@@ -1,3 +1,9 @@
+import { z } from 'zod';
+import { getRequestGeminiKey, verifyRequestKeyLive } from './server/userGeminiKey';
+import { extractDocumentEvidence } from './server/evidenceService';
+import { VeriFinEvidenceEnvelopeSchema, evaluateFailClosedGate } from './src/schemas/evidenceSchema';
+import { runDeterministicUnderwritingEngine } from './src/engine/underwritingDerivations';
+import { redactSensitiveLog } from './src/utils/redaction';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import express from 'express';
 import { randomBytes, randomUUID, scryptSync, timingSafeEqual } from 'node:crypto';
@@ -23,7 +29,7 @@ import {
   cashFlowForecastLogic,
   CustomerDebt,
 } from './server/excelService';
-import { extractBatchAI, extractCicOrBctcAI, extractCollateralAI, chatMultiTurnAI } from './server/geminiService';
+import { extractBatchAI, extractCicOrBctcAI, extractCollateralAI, chatMultiTurnAI, GEMINI_MODEL } from './server/geminiService';
 import {
   getSampleDebtWorkbook,
   getSampleBankWorkbook,
@@ -68,6 +74,24 @@ app.use('/api', (req, res, next) => {
   if (!cookie) res.cookie('verifin_workspace', owner, { httpOnly: true, sameSite: 'strict', secure: req.secure, maxAge: 86400000 });
   res.setHeader('Cache-Control', 'no-store');
   requestOwner.run(owner, next);
+});
+
+// Gemini credentials belong exclusively to this request; never stored on the server.
+const byokRoutes = new Set(['/api/ai/extract-batch', '/api/bank/cic-bctc-extract', '/api/bank/collateral-ltv', '/api/chat/message', '/api/evidence/extract', '/api/bank/credit-proposal']);
+app.use((req, res, next) => {
+  if (!byokRoutes.has(req.path)) return next();
+  try { getRequestGeminiKey(req); next(); }
+  catch (error: any) { res.status(error.status || 401).json({ error: redactSensitiveLog(error), code: error.code }); }
+});
+app.get('/api/evidence/config', (_req, res) => res.json({modelName:GEMINI_MODEL}));
+app.post('/api/evidence/extract', upload.single('file'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({error:'Thiếu tài liệu.'});
+    const type = z.enum(['CIC','BCTC','SAO_KE','TSBD']).safeParse(req.body.document_type);
+    if (!type.success) return res.status(400).json({error:'Loại tài liệu không hợp lệ.'});
+    const evidence = await extractDocumentEvidence(req.file, type.data, getRequestGeminiKey(req), GEMINI_MODEL);
+    return res.json({evidence});
+  } catch (error: any) { return res.status(error.status || 502).json({error:redactSensitiveLog(error),code:error.code}); }
 });
 
 // Cache for generated download files
@@ -223,8 +247,8 @@ app.post(
         download_url: `/api/download/${fileId}`,
       });
     } catch (err: any) {
-      console.error('Error in /api/debt/process:', err);
-      return res.status(500).json({ error: err.message || 'Lỗi khi xử lý công nợ.' });
+      console.error('Error in /api/debt/process:', redactSensitiveLog(err));
+      return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi khi xử lý công nợ.' });
     }
   }
 );
@@ -318,7 +342,7 @@ app.post('/api/settings/bank-account', async (req, res) => {
     activeBankAccount = nextBankAccount;
     return res.json({ success: true, message: 'Đã lưu cấu hình tài khoản VietQR', account: activeBankAccount });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message || 'Lỗi khi cập nhật cấu hình tài khoản' });
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi khi cập nhật cấu hình tài khoản' });
   }
 });
 
@@ -424,7 +448,7 @@ app.post('/api/auth/register', (req, res) => {
       user: sessionUser,
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message || 'Lỗi trong quá trình đăng ký tài khoản' });
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi trong quá trình đăng ký tài khoản' });
   }
 });
 
@@ -485,7 +509,7 @@ app.post('/api/auth/login', (req, res) => {
       error: 'Thông tin đăng nhập không chính xác.',
     });
   } catch (err: any) {
-    return res.status(500).json({ error: err.message || 'Lỗi xác thực đăng nhập' });
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi xác thực đăng nhập' });
   }
 });
 
@@ -562,8 +586,8 @@ app.get('/api/debt/pdf', async (req, res) => {
     res.setHeader('Content-Disposition', `inline; filename="Thong_Bao_No_${khId}.pdf"`);
     return res.send(pdfBuffer);
   } catch (err: any) {
-    console.error('Error in /api/debt/pdf:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi tạo PDF thông báo công nợ.' });
+    console.error('Error in /api/debt/pdf:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi tạo PDF thông báo công nợ.' });
   }
 });
 
@@ -595,8 +619,8 @@ app.get('/api/debt/confirmation-doc', async (req, res) => {
     res.setHeader('Content-Disposition', `attachment; filename="Bien_Ban_Doi_Chieu_Cong_No_${khId}.docx"`);
     return res.send(docxBuf);
   } catch (err: any) {
-    console.error('Error in /api/debt/confirmation-doc:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi xuất biên bản đối chiếu công nợ.' });
+    console.error('Error in /api/debt/confirmation-doc:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi xuất biên bản đối chiếu công nợ.' });
   }
 });
 
@@ -648,8 +672,8 @@ app.post(
         session_id: sessionId,
       });
     } catch (err: any) {
-      console.error('Error in /api/reconcile/preview:', err);
-      return res.status(500).json({ error: err.message || 'Lỗi đọc cấu trúc 2 file.' });
+      console.error('Error in /api/reconcile/preview:', redactSensitiveLog(err));
+      return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi đọc cấu trúc 2 file.' });
     }
   }
 );
@@ -678,8 +702,8 @@ app.post('/api/reconcile/run', upload.none(), async (req, res) => {
       download_url: `/api/download/${fileId}`,
     });
   } catch (err: any) {
-    console.error('Error in /api/reconcile/run:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi đối chiếu số liệu 2 file.' });
+    console.error('Error in /api/reconcile/run:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi đối chiếu số liệu 2 file.' });
   }
 });
 
@@ -710,8 +734,8 @@ app.post('/api/payslip/template-inspect', upload.single('template_file'), async 
       ...inspection,
     });
   } catch (err: any) {
-    console.error('Error in /api/payslip/template-inspect:', err);
-    return res.status(500).json({ error: err.message || 'Không thể đọc cấu trúc biểu mẫu. Vui lòng đảm bảo file là định dạng Excel (.xlsx).' });
+    console.error('Error in /api/payslip/template-inspect:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Không thể đọc cấu trúc biểu mẫu. Vui lòng đảm bảo file là định dạng Excel (.xlsx).' });
   }
 });
 
@@ -816,8 +840,8 @@ app.post(
         employees: employeeItems,
       });
     } catch (err: any) {
-      console.error('Error in /api/payslip/generate:', err);
-      return res.status(500).json({ error: err.message || 'Lỗi tạo phiếu lương hàng loạt.' });
+      console.error('Error in /api/payslip/generate:', redactSensitiveLog(err));
+      return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi tạo phiếu lương hàng loạt.' });
     }
   }
 );
@@ -842,7 +866,7 @@ app.post('/api/ai/extract-batch', upload.array('files'), async (req, res) => {
       originalname: f.originalname,
     }));
 
-    const result = await extractBatchAI(taskType, columnsSchema, rawText, filePayloads);
+    const result = await extractBatchAI(taskType, columnsSchema, rawText, filePayloads, getRequestGeminiKey(req));
     const filename = taskType === 'orders' ? 'Don_Hang_Tu_Tin_Nhan.xlsx' : 'Bao_Cao_Chung_Tu_Tong_Hop.xlsx';
     const fileId = storeDownload(result.excelBuffer, filename);
 
@@ -851,8 +875,8 @@ app.post('/api/ai/extract-batch', upload.array('files'), async (req, res) => {
       download_url: `/api/download/${fileId}`,
     });
   } catch (err: any) {
-    console.error('Error in /api/ai/extract-batch:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi bóc tách AI.' });
+    console.error('Error in /api/ai/extract-batch:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi bóc tách AI.' });
   }
 });
 
@@ -889,8 +913,8 @@ app.post('/api/bank/statement-analyze', upload.single('statement_file'), async (
       download_url: `/api/download/${fileId}`,
     });
   } catch (err: any) {
-    console.error('Error in /api/bank/statement-analyze:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi phân tích sao kê ngân hàng.' });
+    console.error('Error in /api/bank/statement-analyze:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi phân tích sao kê ngân hàng.' });
   }
 });
 
@@ -909,7 +933,7 @@ app.post('/api/bank/cic-bctc-extract', upload.array('files'), async (req, res) =
       originalname: f.originalname,
     }));
 
-    const result = await extractCicOrBctcAI(docType, customerIncome, filePayloads);
+    const result = await extractCicOrBctcAI(docType, customerIncome, filePayloads, getRequestGeminiKey(req));
     const filename = docType === 'cic' ? 'Bang_Tinh_CIC_Nghia_Vu_Tra_No.xlsx' : 'Tham_Dinh_BCTC_Chi_So_Tai_Chinh.xlsx';
     const fileId = storeDownload(result.excelBuffer, filename);
 
@@ -918,8 +942,8 @@ app.post('/api/bank/cic-bctc-extract', upload.array('files'), async (req, res) =
       download_url: `/api/download/${fileId}`,
     });
   } catch (err: any) {
-    console.error('Error in /api/bank/cic-bctc-extract:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi bóc tách hồ sơ tín dụng.' });
+    console.error('Error in /api/bank/cic-bctc-extract:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi bóc tách hồ sơ tín dụng.' });
   }
 });
 
@@ -947,8 +971,8 @@ app.post('/api/bank/portfolio-care', upload.single('portfolio_file'), async (req
       download_url: `/api/download/${fileId}`,
     });
   } catch (err: any) {
-    console.error('Error in /api/bank/portfolio-care:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi chăm sóc danh mục tín dụng.' });
+    console.error('Error in /api/bank/portfolio-care:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi chăm sóc danh mục tín dụng.' });
   }
 });
 
@@ -965,7 +989,7 @@ app.post('/api/bank/collateral-ltv', upload.array('collat_files'), async (req, r
       originalname: f.originalname,
     }));
 
-    const result = await extractCollateralAI(filePayloads, useSample);
+    const result = await extractCollateralAI(filePayloads, useSample, getRequestGeminiKey(req));
     const fileId = storeDownload(result.excelBuffer, 'Bang_Dinh_Gia_TSBD_LTV.xlsx');
 
     return res.json({
@@ -975,8 +999,8 @@ app.post('/api/bank/collateral-ltv', upload.array('collat_files'), async (req, r
       download_url: `/api/download/${fileId}`,
     });
   } catch (err: any) {
-    console.error('Error in /api/bank/collateral-ltv:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi bóc tách sổ đỏ và định giá LTV.' });
+    console.error('Error in /api/bank/collateral-ltv:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi bóc tách sổ đỏ và định giá LTV.' });
   }
 });
 
@@ -987,13 +1011,30 @@ app.post('/api/bank/credit-proposal', upload.single('template_file'), async (req
   try {
     const customerName = req.body.customer_name || 'Khách hàng vay';
     const loanPurpose = req.body.loan_purpose || 'Bổ sung vốn kinh doanh';
-    const loanAmount = parseNumeric(req.body.loan_amount, 1500000000);
-    const tenureMonths = parseNumeric(req.body.tenure_months, 36);
-    const newRateYear = parseNumeric(req.body.new_rate_year, 7.5);
-    const oldRateYear = parseNumeric(req.body.old_rate_year, 11.0);
-    const prepayPenaltyPct = parseNumeric(req.body.prepay_penalty_pct, 1.5);
-    const monthlyNetIncome = parseNumeric(req.body.monthly_net_income, 85000000);
-    const collateralValue = parseNumeric(req.body.collateral_value, 2800000000);
+    const numeric = (value: unknown) => value === '' || value == null ? NaN : Number(value);
+    const terms = z.object({
+      loanAmount: z.number().finite().positive().max(Number.MAX_SAFE_INTEGER),
+      tenureMonths: z.number().int().min(1).max(600),
+      newRateYear: z.number().finite().min(0).max(100),
+      oldRateYear: z.number().finite().min(0).max(100),
+      prepayPenaltyPct: z.number().finite().min(0).max(100),
+      declaredMonthlyDebtServiceVND: z.number().finite().min(0).max(Number.MAX_SAFE_INTEGER),
+    }).safeParse({loanAmount:numeric(req.body.loan_amount),tenureMonths:numeric(req.body.tenure_months),newRateYear:numeric(req.body.new_rate_year),oldRateYear:numeric(req.body.old_rate_year),prepayPenaltyPct:numeric(req.body.prepay_penalty_pct),declaredMonthlyDebtServiceVND:numeric(req.body.declared_monthly_debt_service)});
+    if (!terms.success) return res.status(400).json({error:'Thiếu hoặc sai điều kiện vay.'});
+    const {loanAmount,tenureMonths,newRateYear,oldRateYear,prepayPenaltyPct,declaredMonthlyDebtServiceVND} = terms.data;
+    let suppliedEvidence: unknown;
+    try { suppliedEvidence = typeof req.body.evidence === 'string' ? JSON.parse(req.body.evidence) : req.body.evidence; } catch { suppliedEvidence = null; }
+    const parsedEvidence = VeriFinEvidenceEnvelopeSchema.safeParse(suppliedEvidence);
+    if (!parsedEvidence.success) return res.status(422).json({error:'Thiếu hoặc sai Evidence v2.',code:'EVIDENCE_GATE_BLOCKED'});
+    const evidence = runDeterministicUnderwritingEngine(parsedEvidence.data, {
+      loanAmountVND:loanAmount, proposedMonthlyDebtServiceVND:loanAmount/tenureMonths + loanAmount*newRateYear/100/12,
+      declaredMonthlyDebtServiceVND,ltvCapPercent:75,minimumDscr:1.25,
+    });
+    const gate = evaluateFailClosedGate(evidence);
+    if (!gate.canExportProposal) return res.status(422).json({error:gate.reasonSummary,code:'EVIDENCE_GATE_BLOCKED',gate});
+    await verifyRequestKeyLive(getRequestGeminiKey(req), GEMINI_MODEL);
+    const monthlyNetIncome = evidence.derivations.monthlyAvailableCashFlowVND!.value;
+    const collateralValue = evidence.derivations.totalCollateralValueVND!.value;
 
     let templateBuffer: Buffer | undefined;
     let templateName: string | undefined;
@@ -1012,6 +1053,7 @@ app.post('/api/bank/credit-proposal', upload.single('template_file'), async (req
       prepayPenaltyPct,
       monthlyNetIncome,
       collateralValue,
+      evidence,
       templateBuffer,
       templateName,
     });
@@ -1039,8 +1081,8 @@ app.post('/api/bank/credit-proposal', upload.single('template_file'), async (req
       docx_url: `/api/download/${docxId}`,
     });
   } catch (err: any) {
-    console.error('Error in /api/bank/credit-proposal:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi lập tờ trình tín dụng & phương án vay.' });
+    console.error('Error in /api/bank/credit-proposal:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi lập tờ trình tín dụng & phương án vay.' });
   }
 });
 
@@ -1105,8 +1147,8 @@ app.post('/api/bank/income-assessment', upload.none(), async (req, res) => {
       download_url: `/api/download/${fileId}`,
     });
   } catch (err: any) {
-    console.error('Error in /api/bank/income-assessment:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi thẩm định nguồn thu nhập.' });
+    console.error('Error in /api/bank/income-assessment:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi thẩm định nguồn thu nhập.' });
   }
 });
 
@@ -1141,8 +1183,8 @@ app.post('/api/office/cashflow-forecast', upload.none(), async (req, res) => {
       download_url: `/api/download/${fileId}`,
     });
   } catch (err: any) {
-    console.error('Error in /api/office/cashflow-forecast:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi tính toán dự báo dòng tiền.' });
+    console.error('Error in /api/office/cashflow-forecast:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi tính toán dự báo dòng tiền.' });
   }
 });
 
@@ -1156,15 +1198,15 @@ app.post('/api/chat/message', async (req, res) => {
       return res.status(400).json({ error: 'Danh sách tin nhắn không hợp lệ.' });
     }
 
-    const result = await chatMultiTurnAI(messages, role, model);
+    const result = await chatMultiTurnAI(messages, role, model, getRequestGeminiKey(req));
     return res.json({
       success: true,
       reply: result.text,
       modelUsed: result.modelUsed,
     });
   } catch (err: any) {
-    console.error('Error in /api/chat/message:', err);
-    return res.status(500).json({ error: err.message || 'Lỗi xử lý phản hồi từ Gemini Chatbot.' });
+    console.error('Error in /api/chat/message:', redactSensitiveLog(err));
+    return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi xử lý phản hồi từ Gemini Chatbot.' });
   }
 });
 
@@ -1174,7 +1216,7 @@ app.post('/api/chat/message', async (req, res) => {
 app.use('/api', (_req, res) => res.status(404).json({ error: 'API không tồn tại.' }));
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const status = err instanceof multer.MulterError ? (err.code === 'LIMIT_FILE_SIZE' ? 413 : 400) : (err.status || 500);
-  res.status(status).json({ error: status === 500 ? 'Lỗi máy chủ.' : err.message });
+  res.status(status).json({ error: status === 500 ? 'Lỗi máy chủ.' : redactSensitiveLog(err) });
 });
 
 async function startServer() {
@@ -1203,5 +1245,5 @@ async function startServer() {
 }
 
 startServer().catch(err => {
-  console.error('Failed to start server:', err);
+  console.error('Failed to start server:', redactSensitiveLog(err));
 });

@@ -1,3 +1,4 @@
+import { apiFetch as fetch } from './services/apiClient';
 import React, { useState } from 'react';
 import {
   TrendingUp,

@@ -1,3 +1,5 @@
+import { redactSensitiveLog } from './utils/redaction';
+import { apiFetch as fetch } from './services/apiClient';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Bot,
@@ -35,7 +37,7 @@ import {
 } from './firebase';
 
 export type ChatRole = 'credit_expert' | 'accounting_advisor' | 'quick_assistant';
-export type GeminiModelChoice = 'gemini-4-argon' | 'gemini-3.8-flash' | 'gemini-3.1-flash-lite';
+export type GeminiModelChoice = 'gemini-2.5-flash' | 'gemini-4-argon' | 'gemini-3.8-flash' | 'gemini-3.1-flash-lite';
 
 interface MessageItem {
   id: string;
@@ -61,7 +63,7 @@ const ROLE_CONFIGS: Record<
     name: 'Chuyên Gia Tín Dụng & Quản Trị Rủi Ro',
     badge: 'Tín Dụng & Ngân Hàng Pro',
     description: 'Thẩm định hồ sơ CIC, tính DSCR, LTV, phân nhóm nợ Thông tư 11/2021 và lập tờ trình tín dụng.',
-    defaultModel: 'gemini-4-argon',
+    defaultModel: 'gemini-2.5-flash',
     icon: Landmark,
     themeColor: 'from-amber-500 to-orange-600',
     suggestedQuestions: [
@@ -75,7 +77,7 @@ const ROLE_CONFIGS: Record<
     name: 'Cố Vấn Kế Toán & Quản Trị Công Nợ',
     badge: 'Kế Toán & Văn Phòng',
     description: 'Quản lý sổ công nợ, phân tích tuổi nợ, hóa đơn điện tử Nghị định 123 và bảng lương BHXH.',
-    defaultModel: 'gemini-3.8-flash',
+    defaultModel: 'gemini-2.5-flash',
     icon: Building2,
     themeColor: 'from-emerald-500 to-teal-600',
     suggestedQuestions: [
@@ -89,7 +91,7 @@ const ROLE_CONFIGS: Record<
     name: 'Trợ Lý Tra Cứu Siêu Tốc & Nghiệp Vụ',
     badge: 'Tra Cứu Tức Thì',
     description: 'Tra cứu nhanh mã BIN ngân hàng, cú pháp VietQR Napas, hàm Excel và giải thích thuật ngữ.',
-    defaultModel: 'gemini-3.1-flash-lite',
+    defaultModel: 'gemini-2.5-flash',
     icon: Zap,
     themeColor: 'from-cyan-500 to-blue-600',
     suggestedQuestions: [
@@ -109,7 +111,7 @@ export function GeminiChatbotModule({
   onClose?: () => void;
 } = {}) {
   const [role, setRole] = useState<ChatRole>('accounting_advisor');
-  const [model, setModel] = useState<GeminiModelChoice>('gemini-3.8-flash');
+  const [model, setModel] = useState<GeminiModelChoice>('gemini-2.5-flash');
   const [sessions, setSessions] = useState<FirestoreChatSession[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string>(() => `session_${Date.now()}`);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -139,7 +141,7 @@ export function GeminiChatbotModule({
 
   // Load user sessions from Firestore if authenticated
   useEffect(() => {
-    const user = auth.currentUser;
+    const user = auth?.currentUser;
     if (user) {
       getChatSessions(user.uid)
         .then((saved) => {
@@ -147,7 +149,7 @@ export function GeminiChatbotModule({
             setSessions(saved);
           }
         })
-        .catch(console.error);
+        .catch(error => console.error(redactSensitiveLog(error)));
     }
   }, []);
 
@@ -175,7 +177,7 @@ export function GeminiChatbotModule({
     setCurrentSessionId(sess.sessionId);
     setRole(sess.role);
     setModel(sess.modelUsed);
-    const user = auth.currentUser;
+    const user = auth?.currentUser;
     if (user) {
       setLoading(true);
       try {
@@ -192,7 +194,7 @@ export function GeminiChatbotModule({
           );
         }
       } catch (err) {
-        console.error('Error loading session messages:', err);
+        console.error('Error loading session messages:', redactSensitiveLog(err));
       } finally {
         setLoading(false);
       }
@@ -215,7 +217,7 @@ export function GeminiChatbotModule({
     setInputPrompt('');
     setLoading(true);
 
-    const user = auth.currentUser;
+    const user = auth?.currentUser;
     if (user) {
       // Save user message to Firestore
       const sessObj: FirestoreChatSession = {
@@ -226,12 +228,12 @@ export function GeminiChatbotModule({
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
-      saveChatSession(user.uid, sessObj).catch(console.error);
+      saveChatSession(user.uid, sessObj).catch(error => console.error(redactSensitiveLog(error)));
       addChatMessage(user.uid, currentSessionId, {
         role: 'user',
         content: textToSend,
         timestamp: new Date().toISOString(),
-      }).catch(console.error);
+      }).catch(error => console.error(redactSensitiveLog(error)));
     }
 
     try {
@@ -273,7 +275,7 @@ export function GeminiChatbotModule({
           content: botMsg.content,
           timestamp: new Date().toISOString(),
           modelUsed: botMsg.modelUsed,
-        }).catch(console.error);
+        }).catch(error => console.error(redactSensitiveLog(error)));
       }
     } catch (err: any) {
       const errorMsg: MessageItem = {
@@ -425,6 +427,7 @@ export function GeminiChatbotModule({
             className="bg-slate-850 text-slate-300 border border-slate-700/80 text-[10px] rounded-lg px-1.5 py-1 focus:outline-none focus:border-violet-500 shrink-0 font-mono"
             title="Chọn mô hình Gemini"
           >
+            <option value="gemini-2.5-flash">2.5 Flash (BYOK mặc định)</option>
             <option value="gemini-3.8-flash">3.8 Flash</option>
             <option value="gemini-4-argon">4 Argon</option>
             <option value="gemini-3.1-flash-lite">3.1 Lite</option>
