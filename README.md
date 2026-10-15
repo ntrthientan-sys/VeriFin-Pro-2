@@ -123,3 +123,7 @@ Kiểm tra: `npm run lint`, `npm run build`, `npm test` (7 test gồm kiểm th�
 - Thiếu phép tính cốt lõi luôn chặn. BLOCKER chỉ được xử lý bằng xác nhận kèm ghi chú; thay nguồn hoặc điều kiện vay hủy hiệu lực xác nhận. Backend tính lại trước xuất, không tin derivations/thu nhập/TSBĐ gửi từ client. Đây là cổng kiểm tra bản nháp, không phải quy trình phê duyệt có chữ ký: người có quyền truy cập trình duyệt vẫn có thể sửa observations/xác nhận của họ.
 - IndexedDB `VeriFinPro_EvidenceCache_DB/evidence_v2_store` lưu kết quả đã qua Zod, theo SHA-256 file + người dùng (hash key) + module + schema/model. TTL 24 giờ, tối đa 50 mục; nút xóa cache trong panel. Cache không thay thế live ping. Dữ liệu nguồn còn trong thiết bị tới khi hết hạn/dọn hoặc xóa; không lưu raw API key trong cache.
 - `npm test`, `npx tsc --noEmit`, `npm run build`. Tests dùng provider giả lập, không chứng minh key thật hay quota của người dùng. Repo không kèm key thật để thử thành công Google.
+
+### Kho và đơn hàng — Phase 1–2
+
+Đã bổ sung schema Zod, dữ liệu mẫu có nhãn và engine tất định cho tồn kho, giá vốn, ABC, đề xuất nhập hàng, kiểm soát đơn/hóa đơn và Evidence vận hành. Đây là nền tảng code; màn hình quản lý kho/đơn hàng chưa nằm trong Phase 1–2. Xem [hợp đồng nghiệp vụ và cách dùng](docs/operations-phase-1-2.md).
