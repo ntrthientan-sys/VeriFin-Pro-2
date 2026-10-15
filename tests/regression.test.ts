@@ -36,9 +36,8 @@ test('PDF cannot silently use a demo payment account', async () => {
   await assert.rejects(createDebtPdf('KH1', 'Test', 100, 0, 100), /cấu hình/);
 });
 test('AI failure never produces fabricated customer records', async () => {
-  delete process.env.GEMINI_API_KEY;
-  await assert.rejects(extractBatchAI('orders', 'Name', 'My order', []), /GEMINI_API_KEY/);
-  await assert.rejects(extractCicOrBctcAI('cic', 100, []), /GEMINI_API_KEY/);
-  await assert.rejects(extractCicOrBctcAI('bctc', 100, []), /GEMINI_API_KEY/);
-  await assert.rejects(extractCollateralAI([], false), /GEMINI_API_KEY/);
+  await assert.rejects(extractBatchAI('orders', 'Name', 'My order', []), /MISSING_USER_API_KEY/);
+  await assert.rejects(extractCicOrBctcAI('cic', 100, []), /MISSING_USER_API_KEY/);
+  await assert.rejects(extractCicOrBctcAI('bctc', 100, []), /MISSING_USER_API_KEY/);
+  await assert.rejects(extractCollateralAI([], false), /MISSING_USER_API_KEY/);
 });

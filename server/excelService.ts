@@ -1,3 +1,5 @@
+import type { EvidenceEnvelope } from '../src/schemas/evidenceSchema';
+import { redactSensitiveLog } from '../src/utils/redaction';
 import ExcelJS from 'exceljs';
 import * as XLSX from 'xlsx';
 import { jsPDF } from 'jspdf';
@@ -239,7 +241,7 @@ function getSystemUnicodeFonts(): { regular: string | null; bold: string | null;
       }
     }
   } catch (err) {
-    console.error('Error reading regular unicode font:', err);
+    console.error('Error reading regular unicode font:', redactSensitiveLog(err));
   }
 
   try {
@@ -250,7 +252,7 @@ function getSystemUnicodeFonts(): { regular: string | null; bold: string | null;
       }
     }
   } catch (err) {
-    console.error('Error reading bold unicode font:', err);
+    console.error('Error reading bold unicode font:', redactSensitiveLog(err));
   }
 
   try {
@@ -261,7 +263,7 @@ function getSystemUnicodeFonts(): { regular: string | null; bold: string | null;
       }
     }
   } catch (err) {
-    console.error('Error reading italic unicode font:', err);
+    console.error('Error reading italic unicode font:', redactSensitiveLog(err));
   }
 
   return { regular: cachedRegularFont, bold: cachedBoldFont, italic: cachedItalicFont };
@@ -448,7 +450,7 @@ export async function createDebtPdf(
       doc.roundedRect(55, 385, 120, 120, 6, 6, 'FD');
       doc.addImage(qrDataUrl, 'PNG', 60, 390, 110, 110);
     } catch (e) {
-      console.error('Error embedding QR into PDF:', e);
+      console.error('Error embedding QR into PDF:', redactSensitiveLog(e));
     }
   }
 
@@ -1092,7 +1094,7 @@ export async function generatePayslipsZip(
         }
       }
     } catch (e) {
-      console.warn('Failed to clone sheet for master workbook:', e);
+      console.warn('Failed to clone sheet for master workbook:', redactSensitiveLog(e));
     }
 
     employees.push({
@@ -1666,6 +1668,7 @@ export async function creditProposalLogic(params: {
   prepayPenaltyPct: number;
   monthlyNetIncome: number;
   collateralValue: number;
+  evidence?: EvidenceEnvelope;
   templateBuffer?: Buffer;
   templateName?: string;
 }) {
@@ -1688,8 +1691,8 @@ export async function creditProposalLogic(params: {
   const firstMonthInterest = (loanAmount * (newRateYear / 100)) / 12;
   const firstMonthPayment = monthlyPrincipal + firstMonthInterest;
 
-  const dscr = firstMonthPayment > 0 ? Number((monthlyNetIncome / firstMonthPayment).toFixed(2)) : 0;
-  const ltv = collateralValue > 0 ? Number(((loanAmount / collateralValue) * 100).toFixed(1)) : 0;
+  const dscr = params.evidence?.derivations.dscr?.value ?? (firstMonthPayment > 0 ? Number((monthlyNetIncome / firstMonthPayment).toFixed(2)) : 0);
+  const ltv = params.evidence?.derivations.ltvPercent?.value ?? (collateralValue > 0 ? Number(((loanAmount / collateralValue) * 100).toFixed(1)) : 0);
 
   let totalInterestNew = 0;
   let totalInterestOld = 0;
@@ -1701,11 +1704,12 @@ export async function creditProposalLogic(params: {
   const penaltyFee = loanAmount * (prepayPenaltyPct / 100);
   const netRefinanceSaving = totalInterestOld - totalInterestNew - penaltyFee;
 
-  const dscrEval = dscr >= 1.2 ? 'ĐẠT CHUẨN (>= 1.2x)' : 'CẢNH BÁO DÒNG TIỀN (< 1.2x)';
+  const dscrEval = dscr >= 1.25 ? 'ĐẠT CHUẨN (>= 1.25x)' : 'CẢNH BÁO DÒNG TIỀN (< 1.25x)';
   const ltvEval = ltv <= 75 ? 'AN TOÀN (<= 75%)' : 'VƯỢT NGƯỠNG LTV CHUẨN (> 75%)';
-  const conclusion =
-    dscr >= 1.2 && ltv <= 75
-      ? 'ĐỦ ĐIỀU KIỆN CẤP TÍN DỤNG - KHUYẾN NGHỊ PHÊ DUYỆT'
+  const conclusion = params.evidence?.unknowns.some(issue => issue.severity === 'BLOCKER')
+    ? 'BẢN NHÁP CÓ NGOẠI LỆ ĐÃ ĐƯỢC CHUYÊN VIÊN GHI CHÚ - CHỜ PHÊ DUYỆT'
+    : dscr >= 1.25 && ltv <= 75
+      ? 'ĐẠT NGƯỠNG TÍNH TOÁN DSCR/LTV - BẢN NHÁP CHỜ PHÊ DUYỆT'
       : 'CẦN BỔ SUNG TÀI SẢN BẢO ĐẢM HOẶC GIẢM SỐ TIỀN VAY';
 
   const todayStr = new Date().toLocaleDateString('vi-VN');
@@ -1725,16 +1729,23 @@ export async function creditProposalLogic(params: {
     ['Phí phạt tất toán trước hạn NH cũ (%)', prepayPenaltyPct, 'Ô B8'],
     ['Thu nhập ròng hàng tháng của KH (VNĐ)', monthlyNetIncome, 'Ô B9'],
     ['Tổng giá trị định giá Tài sản bảo đảm (VNĐ)', collateralValue, 'Ô B10'],
-    ['👉 Nghĩa vụ trả nợ cao nhất tháng đầu (Gốc + Lãi)', { formula: 'ROUND(B4/B5 + B4*(B6/100)/12, 0)', result: Math.round(firstMonthPayment) }, 'Tự động tính'],
-    ['👉 Hệ số đảm bảo trả nợ (DSCR)', { formula: 'IF(B11>0, ROUND(B9/B11, 2), 0)', result: dscr }, dscrEval],
-    ['👉 Tỷ lệ cấp tín dụng trên TSBĐ (LTV %)', { formula: 'IF(B10>0, ROUND(B4/B10*100, 1), 0)', result: ltv }, ltvEval],
+    ['👉 Nghĩa vụ trả nợ cao nhất tháng đầu (Gốc + Lãi)', { formula: 'B4/B5 + B4*(B6/100)/12', result: firstMonthPayment }, 'Tự động tính'],
+    ['👉 Hệ số đảm bảo trả nợ (DSCR)', { formula: 'IF(B11+B18>0, ROUND(B9/(B11+B18), 6), 0)', result: dscr }, dscrEval],
+    ['👉 Tỷ lệ cấp tín dụng trên TSBĐ (LTV %)', { formula: 'IF(B10>0, ROUND(B4/B10*100, 6), 0)', result: ltv }, ltvEval],
     ['💰 Tổng tiền lãi nếu giữ ở Ngân hàng cũ', Math.round(totalInterestOld), 'Theo dư nợ giảm dần'],
     ['💰 Tổng tiền lãi khi chuyển sang Ngân hàng mới', { formula: `SUM('2_Lich_Tra_No_Chi_Tiet'!D2:D${tenure + 1})`, result: Math.round(totalInterestNew) }, 'Liên kết từ Sheet 2'],
     ['💰 Phí phạt trả nợ trước hạn tại NH cũ', { formula: 'ROUND(B4*B8/100, 0)', result: Math.round(penaltyFee) }, 'Chi phí chuyển đổi'],
     ['🔥 SỐ TIỀN KHÁCH HÀNG TIẾT KIỆM RÒNG KHI CHUYỂN VAY', { formula: 'B14-B15-B16', result: Math.round(netRefinanceSaving) }, netRefinanceSaving > 0 ? '✅ NÊN CHUYỂN NGAY - LỜI RÒNG' : 'Cân nhắc thêm'],
   ];
 
+  summaryRows.push(['Nghĩa vụ trả nợ hiện hữu bình quân tháng', params.evidence?.derivations.monthlyObservedDebtServiceVND?.value ?? 0, 'Evidence v2']);
   summaryRows.forEach(r => wsSum.addRow(r));
+  if (params.evidence) {
+    const audit = wb.addWorksheet('3_Evidence_Review');
+    audit.addRow(['Mã vấn đề', 'Mức độ', 'Nội dung', 'Đã xác nhận', 'Ghi chú người kiểm tra']);
+    for (const issue of params.evidence.unknowns) audit.addRow([issue.code,issue.severity,issue.message,issue.resolvedByHuman,issue.humanNote || '']);
+    audit.columns = [{width:30},{width:15},{width:75},{width:15},{width:75}];
+  }
   wsSum.columns = [{ width: 45 }, { width: 30 }, { width: 40 }];
 
   wsSum.eachRow((row, rNum) => {
@@ -1824,7 +1835,7 @@ export async function creditProposalLogic(params: {
     try {
       docxBuffer = await renderDocxWithTemplate(templateBuffer, proposalData);
     } catch (e) {
-      console.warn('Custom docx template render error, falling back to standard docx:', e);
+      console.warn('Custom docx template render error, falling back to standard docx:', redactSensitiveLog(e));
       docxBuffer = await getSampleProposalTemplateDocx();
       docxBuffer = await renderDocxWithTemplate(docxBuffer, proposalData);
     }

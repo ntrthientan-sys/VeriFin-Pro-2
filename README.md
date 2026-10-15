@@ -101,7 +101,7 @@ Dự án được xây dựng và phát triển bởi **Nguyễn Trường Thiê
 - `ADMIN_EMAILS`: danh sách email quản trị phân cách bằng dấu phẩy. Chỉ các email này được sửa tài khoản thụ hưởng dùng chung. Chức danh/nhánh do người dùng chọn không cấp quyền quản trị.
 - `ADMIN_PASSWORD`: mật khẩu ít nhất 12 ký tự, dùng tạo tài khoản quản trị đầu tiên trong `ADMIN_EMAILS` khi chưa tồn tại. Không có tài khoản/mật khẩu demo được tạo sẵn. Đổi biến này không thay mật khẩu tài khoản đã tồn tại.
 - `DATA_DIR`: thư mục dữ liệu bền vững (mặc định `./data`). Tài khoản được lưu với mật khẩu băm scrypt có salt; cấu hình ngân hàng cũng được giữ sau khi khởi động lại. Sao lưu và bảo vệ thư mục này; phiên đăng nhập cục bộ vẫn hết hiệu lực khi máy chủ khởi động lại.
-- `GEMINI_API_KEY`: cần cho OCR/CIC/BCTC/chat AI. Lỗi AI hoặc kết quả rỗng trả lỗi, không thay bằng hồ sơ khách hàng giả. Sổ đỏ chỉ dùng dữ liệu mẫu khi chọn rõ `use_sample`.
+- Gemini sử dụng BYOK bắt buộc: người dùng nhập key cá nhân tại màn hình khóa và phải vượt qua live ping mỗi lần mở app. Không đặt key Gemini trong biến môi trường hoặc mã nguồn. Lỗi AI không được thay bằng dữ liệu mẫu.
 - `FIREBASE_PROJECT_ID`: phải khớp project trong `firebase-applet-config.json` nếu dùng đăng nhập Google. Backend xác minh ID token bằng Firebase Admin SDK, không tin thông tin người dùng do frontend tự khai. Cần cấu hình Google provider và authorized domains tại Firebase. Chưa kiểm thử OAuth thật trong môi trường kiểm tra.
 - Tài khoản thụ hưởng ban đầu để trống. Đăng nhập quản trị và cấu hình trước khi xuất PDF công nợ. Không tự chọn tài khoản mẫu.
 - File xuất và phiên đối soát gắn với cookie HttpOnly của trình duyệt, hết hạn sau 30 phút; tổng buffer giới hạn 256 MiB. Khởi động lại làm mất file tạm. Cookie không thay thế cơ chế phân quyền tổ chức.
@@ -110,3 +110,20 @@ Dự án được xây dựng và phát triển bởi **Nguyễn Trường Thiê
 Kiểm tra: `npm run lint`, `npm run build`, `npm test` (7 test gồm kiểm thử API thực tế).
 
 Đây vẫn là mô hình một đơn vị dùng chung cấu hình ngân hàng. Các API nghiệp vụ chưa bắt buộc đăng nhập và chưa có rate limit; chưa phù hợp triển khai public với dữ liệu khách hàng thật. Chưa xác minh nghiệp vụ thuế/pháp lý, kết quả AI với API key thật, hoặc QR bằng ứng dụng ngân hàng. Google/Firebase và Gemini cần cấu hình dịch vụ riêng. Cần cơ sở dữ liệu và quản lý phiên dùng chung nếu chạy nhiều server.
+
+
+## Evidence v2 và BYOK
+
+- `ApiKeyGate` chỉ mount ứng dụng sau khi gọi Gemini thành công (`ping`, `maxOutputTokens: 1`). HTTP 401/403 do Gemini hoặc `API_KEY_INVALID` sẽ xóa key và khóa lại. Hết quota, mạng lỗi và model không khả dụng đều không mở khóa.
+- Key cá nhân gửi bằng header đến API cùng origin rồi đến Google; không nằm trong URL/log/cache. Chọn lưu thiết bị dùng localStorage; bỏ chọn dùng sessionStorage. Base64 chỉ che dạng lưu, không phải mã hóa. Dùng HTTPS khi triển khai.
+- Không có key chủ dự án. `GEMINI_MODEL` cấu hình model backend; live ping mặc định `gemini-2.5-flash`. Chọn model phải phù hợp tài khoản; lỗi model không fallback sang kết quả giả. Firebase login/chat persistence là tùy chọn qua `VITE_FIREBASE_API_KEY` (key Firebase riêng, không được dùng cho Gemini).
+- Evidence v2 gồm observations có hash/snippet, derivations tính bằng TypeScript, inferences tách riêng và unknowns. Panel Tờ trình nạp riêng từng CIC, BCTC, sao kê, hồ sơ định giá (PDF/PNG/JPEG/WebP, tối đa 10 MB/file); hiển thị nguồn theo trang, không gọi lại AI để tính chỉ số.
+- Trích xuất chỉ ghi số có trong tài liệu. Sao kê phải có kỳ và tổng dòng tiền hoạt động trước trả nợ/tổng trả nợ được ghi rõ; nhiều sao kê hoặc tổng không rõ sẽ bị chặn, không để AI tự cộng. TSBĐ cần giá trị định giá có nguồn; sổ đỏ thiếu định giá không đủ để xuất.
+- DSCR = dòng tiền hoạt động bình quân tháng (hoặc EBITDA năm / 12) / (nghĩa vụ hiện hữu bình quân tháng + nghĩa vụ khoản vay mới tháng đầu). Cách tính hiện tại thận trọng, chưa loại trừ nghĩa vụ khoản vay cũ khi refinance. LTV mặc định tối đa 75%, DSCR tối thiểu 1,25; đây là chính sách ứng dụng, không phải kết luận pháp lý/nghiệp vụ áp dụng mọi ngân hàng. Lệch nghĩa vụ trên 5 triệu/tháng và CIC nhóm >1 sinh BLOCKER.
+- Thiếu phép tính cốt lõi luôn chặn. BLOCKER chỉ được xử lý bằng xác nhận kèm ghi chú; thay nguồn hoặc điều kiện vay hủy hiệu lực xác nhận. Backend tính lại trước xuất, không tin derivations/thu nhập/TSBĐ gửi từ client. Đây là cổng kiểm tra bản nháp, không phải quy trình phê duyệt có chữ ký: người có quyền truy cập trình duyệt vẫn có thể sửa observations/xác nhận của họ.
+- IndexedDB `VeriFinPro_EvidenceCache_DB/evidence_v2_store` lưu kết quả đã qua Zod, theo SHA-256 file + người dùng (hash key) + module + schema/model. TTL 24 giờ, tối đa 50 mục; nút xóa cache trong panel. Cache không thay thế live ping. Dữ liệu nguồn còn trong thiết bị tới khi hết hạn/dọn hoặc xóa; không lưu raw API key trong cache.
+- `npm test`, `npx tsc --noEmit`, `npm run build`. Tests dùng provider giả lập, không chứng minh key thật hay quota của người dùng. Repo không kèm key thật để thử thành công Google.
+
+### Kho và đơn hàng — Phase 1–2
+
+Đã bổ sung schema Zod, dữ liệu mẫu có nhãn và engine tất định cho tồn kho, giá vốn, ABC, đề xuất nhập hàng, kiểm soát đơn/hóa đơn và Evidence vận hành. Đây là nền tảng code; màn hình quản lý kho/đơn hàng chưa nằm trong Phase 1–2. Xem [hợp đồng nghiệp vụ và cách dùng](docs/operations-phase-1-2.md).

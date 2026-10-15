@@ -1,3 +1,4 @@
+import { redactSensitiveLog } from './utils/redaction';
 import { initializeApp, getApps } from 'firebase/app';
 import {
   getAuth,
@@ -24,16 +25,18 @@ import {
 import firebaseConfig from '../firebase-applet-config.json';
 
 // Initialize Firebase App
-const app = getApps().length > 0 ? getApps()[0] : initializeApp(firebaseConfig);
+const configuredKey = import.meta.env.VITE_FIREBASE_API_KEY;
+const app = configuredKey ? (getApps()[0] || initializeApp({...firebaseConfig,apiKey:configuredKey})) : null;
 
 // CRITICAL: getFirestore must pass firestoreDatabaseId as required by AI Studio
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
-export const auth = getAuth(app);
+export const db = app ? getFirestore(app, firebaseConfig.firestoreDatabaseId) : null;
+export const auth = app ? getAuth(app) : null;
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 // Test connection on boot
 export async function testFirestoreConnection() {
+  if (!db) return;
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));
   } catch (error) {
@@ -72,29 +75,13 @@ export interface FirestoreErrorInfo {
 }
 
 export function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo:
-        auth.currentUser?.providerData?.map((provider) => ({
-          providerId: provider.providerId,
-          email: provider.email,
-        })) || [],
-    },
-    operationType,
-    path,
-  };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.error('Firestore Error: ', redactSensitiveLog(error));
+  throw new Error(redactSensitiveLog(error));
 }
 
 // Google Sign-In with Popup
 export async function signInWithGoogle() {
+  if (!auth) throw new Error('Google Sign-In chưa được cấu hình. Vui lòng dùng đăng nhập email.');
   try {
     const result = await signInWithPopup(auth, googleProvider);
     const user = result.user;
@@ -102,19 +89,19 @@ export async function signInWithGoogle() {
     await syncUserProfile(user);
     return user;
   } catch (error) {
-    console.error('Google Sign-In Error:', error);
+    console.error('Google Sign-In Error:', redactSensitiveLog(error));
     throw error;
   }
 }
 
 // Sign Out
 export async function logOutFirebase() {
-  await firebaseSignOut(auth);
+  if (auth) await firebaseSignOut(auth);
 }
 
 // Sync user profile to Firestore
 export async function syncUserProfile(user: FirebaseUser, extra?: { branch?: string; roleTitle?: string }) {
-  if (!user || !user.uid) return;
+  if (!db || !user || !user.uid) return;
   const userRef = doc(db, 'users', user.uid);
   try {
     const existing = await getDoc(userRef);
@@ -137,6 +124,7 @@ export async function syncUserProfile(user: FirebaseUser, extra?: { branch?: str
 
 // Bank Account Config persistence in Firestore
 export async function saveUserBankConfig(userId: string, config: any) {
+  if (!db) return null;
   const docRef = doc(db, 'users', userId, 'settings', 'bankAccount');
   try {
     await setDoc(docRef, { ...config, updatedAt: new Date().toISOString() }, { merge: true });
@@ -146,6 +134,7 @@ export async function saveUserBankConfig(userId: string, config: any) {
 }
 
 export async function getUserBankConfig(userId: string) {
+  if (!db) return null;
   const docRef = doc(db, 'users', userId, 'settings', 'bankAccount');
   try {
     const snap = await getDoc(docRef);
@@ -160,7 +149,7 @@ export interface FirestoreChatSession {
   sessionId: string;
   title: string;
   role: 'credit_expert' | 'accounting_advisor' | 'quick_assistant';
-  modelUsed: 'gemini-4-argon' | 'gemini-3.8-flash' | 'gemini-3.1-flash-lite';
+  modelUsed: 'gemini-2.5-flash' | 'gemini-4-argon' | 'gemini-3.8-flash' | 'gemini-3.1-flash-lite';
   createdAt: string;
   updatedAt: string;
 }
@@ -174,6 +163,7 @@ export interface FirestoreChatMessage {
 }
 
 export async function saveChatSession(userId: string, session: FirestoreChatSession) {
+  if (!db) return;
   const sessionRef = doc(db, 'users', userId, 'chatSessions', session.sessionId);
   try {
     await setDoc(sessionRef, session, { merge: true });
@@ -183,6 +173,7 @@ export async function saveChatSession(userId: string, session: FirestoreChatSess
 }
 
 export async function addChatMessage(userId: string, sessionId: string, message: FirestoreChatMessage) {
+  if (!db) return;
   const msgId = `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
   const msgRef = doc(db, 'users', userId, 'chatSessions', sessionId, 'messages', msgId);
   try {
@@ -196,6 +187,7 @@ export async function addChatMessage(userId: string, sessionId: string, message:
 }
 
 export async function getChatSessions(userId: string): Promise<FirestoreChatSession[]> {
+  if (!db) return [];
   const colRef = collection(db, 'users', userId, 'chatSessions');
   try {
     const snap = await getDocs(colRef);
@@ -210,6 +202,7 @@ export async function getChatSessions(userId: string): Promise<FirestoreChatSess
 }
 
 export async function getSessionMessages(userId: string, sessionId: string): Promise<FirestoreChatMessage[]> {
+  if (!db) return [];
   const colRef = collection(db, 'users', userId, 'chatSessions', sessionId, 'messages');
   try {
     const snap = await getDocs(colRef);

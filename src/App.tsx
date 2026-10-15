@@ -1,4 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import { ApiKeyGate } from './components/auth/ApiKeyGate';
+import { createEmptyEvidenceEnvelope, evaluateFailClosedGate } from './schemas/evidenceSchema';
+import { runDeterministicUnderwritingEngine } from './engine/underwritingDerivations';
+import { apiFetch as fetch } from './services/apiClient';
+import { redactSensitiveLog } from './utils/redaction';
+import React, { useState, useEffect, useMemo, lazy, Suspense } from 'react';
 import {
   FileSpreadsheet,
   FileCheck2,
@@ -116,7 +121,11 @@ export interface UserSession {
   loginAt?: string;
 }
 
-export default function App() {
+const ProposalEvidencePanel = lazy(() => import('./components/evidence/ProposalEvidencePanel'));
+
+export default function App() { return <ApiKeyGate><VeriFinApplication /></ApiKeyGate>; }
+
+function VeriFinApplication() {
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
@@ -138,6 +147,7 @@ export default function App() {
 
   // Sync Firebase Authentication state
   useEffect(() => {
+    if (!auth) return;
     const unsubscribe = auth.onAuthStateChanged(async (fbUser) => {
       if (fbUser) {
         try {
@@ -154,7 +164,7 @@ export default function App() {
           }));
           localStorage.setItem('applet_auth_token', token);
         } catch (e) {
-          console.error('Error in onAuthStateChanged:', e);
+          console.error('Error in onAuthStateChanged:', redactSensitiveLog(e));
         }
       }
     });
@@ -179,14 +189,14 @@ export default function App() {
       localStorage.setItem('applet_auth_user', JSON.stringify(verifiedUser));
       localStorage.setItem('applet_auth_token', token);
     } catch (e) {
-      console.error('Direct Google Sign-in error:', e);
+      console.error('Direct Google Sign-in error:', redactSensitiveLog(e));
     }
   };
 
   const handleLogout = async () => {
     const token = localStorage.getItem('applet_auth_token');
     await fetch('/api/auth/logout', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {} });
-    await logOutFirebase().catch(console.error);
+    await logOutFirebase().catch(error => console.error(redactSensitiveLog(error)));
     localStorage.removeItem('applet_auth_token');
     localStorage.removeItem('applet_auth_user');
     localStorage.removeItem('excel_ai_agent_user');
@@ -5106,20 +5116,30 @@ function CreditProposalModule() {
   const [newRateYear, setNewRateYear] = useState(7.5);
   const [oldRateYear, setOldRateYear] = useState(11.0);
   const [prepayPenaltyPct, setPrepayPenaltyPct] = useState(1.5);
-  const [monthlyNetIncome, setMonthlyNetIncome] = useState(85000000);
-  const [collateralValue, setCollateralValue] = useState(2800000000);
   const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [evidence, setEvidence] = useState(createEmptyEvidenceEnvelope);
+  const [evidenceBusy, setEvidenceBusy] = useState(false);
+  const [declaredMonthlyDebt, setDeclaredMonthlyDebt] = useState(0);
+  const derivedEvidence = useMemo(() => runDeterministicUnderwritingEngine(evidence, {loanAmountVND:loanAmount,proposedMonthlyDebtServiceVND:loanAmount/tenureMonths + loanAmount*newRateYear/100/12,declaredMonthlyDebtServiceVND:declaredMonthlyDebt,ltvCapPercent:75,minimumDscr:1.25}), [evidence,loanAmount,tenureMonths,newRateYear,declaredMonthlyDebt]);
+  const evidenceGate = evaluateFailClosedGate(derivedEvidence);
+  const proposalBasis = JSON.stringify([derivedEvidence,customerName,loanPurpose,oldRateYear,prepayPenaltyPct,templateFile?.name,templateFile?.lastModified]);
+  useEffect(() => { setEvidence(previous => ({...previous,derivations:{},unknowns:previous.unknowns.map(issue=>({...issue,resolvedByHuman:false,humanNote:undefined}))})); }, [loanAmount,tenureMonths,newRateYear,declaredMonthlyDebt]);
 
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => { setResult(null); }, [derivedEvidence,customerName,loanPurpose,oldRateYear,prepayPenaltyPct,templateFile]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (evidenceBusy || !evidenceGate.canExportProposal) { setError(evidenceGate.reasonSummary); return; }
     setLoading(true);
     setError(null);
     try {
       const fd = new FormData();
+      fd.append('evidence', JSON.stringify(derivedEvidence));
+      fd.append('declared_monthly_debt_service', String(declaredMonthlyDebt));
       fd.append('customer_name', customerName);
       fd.append('loan_purpose', loanPurpose);
       fd.append('loan_amount', String(loanAmount));
@@ -5127,8 +5147,8 @@ function CreditProposalModule() {
       fd.append('new_rate_year', String(newRateYear));
       fd.append('old_rate_year', String(oldRateYear));
       fd.append('prepay_penalty_pct', String(prepayPenaltyPct));
-      fd.append('monthly_net_income', String(monthlyNetIncome));
-      fd.append('collateral_value', String(collateralValue));
+      fd.append('monthly_net_income', String(derivedEvidence.derivations.monthlyAvailableCashFlowVND?.value));
+      fd.append('collateral_value', String(derivedEvidence.derivations.totalCollateralValueVND?.value));
       if (templateFile) {
         fd.append('template_file', templateFile);
       }
@@ -5144,7 +5164,7 @@ function CreditProposalModule() {
       }
 
       const data = await res.json();
-      setResult(data);
+      setResult({...data,proposalBasis});
     } catch (err: any) {
       setError(err.message || 'Lỗi xử lý tờ trình');
     } finally {
@@ -5170,6 +5190,8 @@ function CreditProposalModule() {
         </p>
       </div>
 
+      <Suspense fallback={<p role="status">Đang tải kiểm tra bằng chứng…</p>}><ProposalEvidencePanel envelope={derivedEvidence} onChange={setEvidence} onBusyChange={setEvidenceBusy} /></Suspense>
+      <label className="block text-sm">Nghĩa vụ trả nợ hiện hữu do khách khai báo (VNĐ/tháng)<input type="number" min="0" value={declaredMonthlyDebt} onChange={event=>setDeclaredMonthlyDebt(Number(event.target.value))} className="ml-3 rounded bg-slate-800 p-2" /></label>
       {/* Form Input */}
       <form onSubmit={handleSubmit} className="bg-slate-900/90 p-5 rounded-2xl border border-emerald-500/30 space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
@@ -5273,8 +5295,7 @@ function CreditProposalModule() {
             </label>
             <input
               type="number"
-              value={monthlyNetIncome}
-              onChange={(e) => setMonthlyNetIncome(Number(e.target.value))}
+              value={derivedEvidence.derivations.monthlyAvailableCashFlowVND?.value ?? ''} readOnly
               required
               className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white focus:outline-none focus:border-emerald-500 text-xs"
             />
@@ -5286,8 +5307,7 @@ function CreditProposalModule() {
             </label>
             <input
               type="number"
-              value={collateralValue}
-              onChange={(e) => setCollateralValue(Number(e.target.value))}
+              value={derivedEvidence.derivations.totalCollateralValueVND?.value ?? ''} readOnly
               required
               className="w-full bg-slate-800 border border-slate-700 rounded-xl p-2.5 text-white focus:outline-none focus:border-emerald-500 text-xs"
             />
@@ -5321,7 +5341,7 @@ function CreditProposalModule() {
 
         <button
           type="submit"
-          disabled={loading}
+          disabled={loading || evidenceBusy || !evidenceGate.canExportProposal}
           className="px-6 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-2 transition shadow-lg shadow-emerald-950/40"
         >
           {loading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Calculator className="w-4 h-4" />}
@@ -5337,7 +5357,7 @@ function CreditProposalModule() {
       </form>
 
       {/* Results View */}
-      {result && (
+      {result && result.proposalBasis === proposalBasis && evidenceGate.canExportProposal && !evidenceBusy && (
         <div className="space-y-5 animate-fadeIn">
           {/* Top 4 KPI Metrics */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -5351,11 +5371,11 @@ function CreditProposalModule() {
 
             <div className="bg-slate-900/90 p-4 rounded-2xl border border-slate-800">
               <div className="text-xs text-slate-400">Hệ Số DSCR Đảm Bảo Nợ</div>
-              <div className={`text-xl font-bold mt-1 ${result.dscr >= 1.2 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              <div className={`text-xl font-bold mt-1 ${result.dscr >= 1.25 ? 'text-emerald-400' : 'text-rose-400'}`}>
                 {result.dscr}x
               </div>
               <div className="text-[11px] text-emerald-300 mt-1">
-                {result.dscr >= 1.2 ? '✅ Đạt chuẩn (>= 1.2x)' : '⚠️ Cảnh báo nguồn thu'}
+                {result.dscr >= 1.25 ? '✅ Đạt chuẩn (>= 1.25x)' : '⚠️ Cảnh báo nguồn thu'}
               </div>
             </div>
 

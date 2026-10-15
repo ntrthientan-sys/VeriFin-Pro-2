@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 test('HTTP: authentication, beneficiary permissions, private exports, zero values and missing sessions', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'verifin-api-'));
-  const child = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], { env: { ...process.env, NODE_ENV: 'production', PORT: '3198', DATA_DIR: dataDir, ADMIN_EMAILS: 'admin@example.test', ADMIN_PASSWORD: 'TestPassword123!', GEMINI_API_KEY: '', FIREBASE_PROJECT_ID: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], { env: { ...process.env, NODE_ENV: 'production', PORT: '3198', DATA_DIR: dataDir, ADMIN_EMAILS: 'admin@example.test', ADMIN_PASSWORD: 'TestPassword123!', FIREBASE_PROJECT_ID: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = '';
   child.stdout.on('data', d => logs += d);
   child.stderr.on('data', d => logs += d);
@@ -45,8 +45,17 @@ test('HTTP: authentication, beneficiary permissions, private exports, zero value
     assert.equal(response.status, 200);
     assert.equal((await response.json()).ending_cash, 60);
     response = await request('/api/ai/extract-batch', { raw_text: 'test' });
-    assert.equal(response.status, 500);
-    assert.match((await response.json()).error, /GEMINI_API_KEY/);
+    assert.equal(response.status, 401);
+    assert.match((await response.json()).error, /MISSING_USER_API_KEY/);
+    assert.equal((await request('/api/bank/credit-proposal', {})).status, 401);
+    const validTerms = {loan_amount:750000000,tenure_months:75,new_rate_year:0,old_rate_year:0,prepay_penalty_pct:0,declared_monthly_debt_service:10000000};
+    const directProposal = (body: object) => fetch('http://127.0.0.1:3198/api/bank/credit-proposal', {method:'POST',headers:{'Content-Type':'application/json','X-Gemini-Api-Key':'AIza'+'z'.repeat(35)},body:JSON.stringify(body)});
+    response = await directProposal(validTerms);
+    assert.equal(response.status,422);
+    assert.equal((await response.json()).code,'EVIDENCE_GATE_BLOCKED');
+    response = await directProposal({...validTerms,evidence:{schemaVersion:'2.0.0',observations:{cic:[],bctc:[],saoKe:[],collateral:[]},derivations:{},inferences:[],unknowns:[]},monthly_net_income:999999999,collateral_value:999999999999});
+    assert.equal(response.status,422); // Spoofed legacy income/collateral cannot bypass recomputation.
+    response = await directProposal({...validTerms,loan_amount:undefined});assert.equal(response.status,400);
     await request('/api/auth/logout', {}, token);
     assert.equal((await (await request('/api/auth/me', undefined, token)).json()).authenticated, false);
     assert.equal((await request('/api/missing')).status, 404);

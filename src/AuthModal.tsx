@@ -1,3 +1,5 @@
+import { redactSensitiveLog } from './utils/redaction';
+import { apiFetch as fetch } from './services/apiClient';
 import React, { useState } from 'react';
 import {
   X,
@@ -110,7 +112,7 @@ export function AuthModal({
         onClose();
       }, 500);
     } catch (err: any) {
-      console.error('Google Sign-In error:', err);
+      console.error('Google Sign-In error:', redactSensitiveLog(err));
       setErrorMessage(err.message || 'Lỗi khi đăng nhập bằng Google.');
     } finally {
       setLoading(false);

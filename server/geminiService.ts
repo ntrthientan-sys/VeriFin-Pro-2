@@ -1,25 +1,11 @@
+import { createUserGeminiClient, normalizeGeminiError } from './userGeminiKey';
 import 'dotenv/config';
-import { GoogleGenAI, Type } from '@google/genai';
+import { Type } from '@google/genai';
 import ExcelJS from 'exceljs';
 import { styleHeader, collateralLtvLogic } from './excelService';
 import { getSampleCollateralAssets } from './sampleData';
 
 export const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
-
-let aiInstance: GoogleGenAI | null = null;
-function getAI(): GoogleGenAI | null {
-  if (!aiInstance && process.env.GEMINI_API_KEY) {
-    aiInstance = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
-    });
-  }
-  return aiInstance;
-}
 
 function parseJsonSafely(text: string) {
   const cleaned = text.replace(/```json|```/g, '').trim();
@@ -42,7 +28,8 @@ export async function extractBatchAI(
   taskType: 'orders' | 'documents',
   columnsSchema: string,
   rawText: string,
-  files: Array<{ buffer: Buffer; mimetype: string; originalname: string }>
+  files: Array<{ buffer: Buffer; mimetype: string; originalname: string }>,
+  apiKey?: string
 ) {
   const cols = columnsSchema
     .split(',')
@@ -50,8 +37,7 @@ export async function extractBatchAI(
     .filter(Boolean);
 
   let records: any[] = [];
-  const ai = getAI();
-  if (!ai) throw new Error('Chưa cấu hình GEMINI_API_KEY. Không thể phân tích AI.');
+  const ai = createUserGeminiClient(apiKey);
 
   if (ai) {
     try {
@@ -108,11 +94,11 @@ CHỈ TRẢ VỀ JSON ARRAY.`;
       const parsed = parseJsonSafely(responseText);
       records = Array.isArray(parsed) ? parsed : [parsed];
     } catch (err: any) {
-      console.warn('Gemini extraction warning, falling back to smart heuristic:', err.message);
+      throw normalizeGeminiError(err);
     }
   }
 
-  if (!records.length) throw new Error('Không trích xuất được dữ liệu. Kiểm tra GEMINI_API_KEY và chứng từ đầu vào.');
+  if (!records.length) throw new Error('Không trích xuất được dữ liệu. Kiểm tra key cá nhân và chứng từ đầu vào.');
 
   // Duplicate detection
   const seenKeys = new Set<string>();
@@ -163,10 +149,10 @@ CHỈ TRẢ VỀ JSON ARRAY.`;
 export async function extractCicOrBctcAI(
   docType: 'cic' | 'bctc',
   customerIncome: number = 50000000,
-  files: Array<{ buffer: Buffer; mimetype: string; originalname: string }>
+  files: Array<{ buffer: Buffer; mimetype: string; originalname: string }>,
+  apiKey?: string
 ) {
-  const ai = getAI();
-  if (!ai) throw new Error('Chưa cấu hình GEMINI_API_KEY. Không thể phân tích AI.');
+  const ai = createUserGeminiClient(apiKey);
   const wb = new ExcelJS.Workbook();
 
   if (docType === 'cic') {
@@ -206,7 +192,7 @@ Chỉ trả về JSON Array thuần túy.`,
         const parsed = parseJsonSafely(resp.text || '[]');
         loans = Array.isArray(parsed) ? parsed : [parsed];
       } catch (err: any) {
-        console.warn('CIC AI parsing fallback:', err.message);
+        throw normalizeGeminiError(err);
       }
     }
 
@@ -343,7 +329,7 @@ Chỉ trả về JSON thuần túy.`,
         });
         fin = parseJsonSafely(resp.text || '{}');
       } catch (err: any) {
-        console.warn('BCTC AI parsing fallback:', err.message);
+        throw normalizeGeminiError(err);
       }
     }
 
@@ -395,7 +381,8 @@ Chỉ trả về JSON thuần túy.`,
 // ==========================================
 export async function extractCollateralAI(
   files: Array<{ buffer: Buffer; mimetype: string; originalname: string }>,
-  useSample: boolean = false
+  useSample: boolean = false,
+  apiKey?: string
 ) {
   if (useSample) {
     const sampleAssets = getSampleCollateralAssets();
@@ -403,8 +390,7 @@ export async function extractCollateralAI(
   }
 
   let assets: any[] = [];
-  const ai = getAI();
-  if (!ai) throw new Error('Chưa cấu hình GEMINI_API_KEY. Không thể phân tích AI.');
+  const ai = createUserGeminiClient(apiKey);
   if (ai) {
     try {
       const contentsParts: any[] = [];
@@ -449,7 +435,7 @@ CHỈ TRẢ VỀ JSON ARRAY.`;
       const parsed = parseJsonSafely(responseText);
       assets = Array.isArray(parsed) ? parsed : [parsed];
     } catch (e: any) {
-      console.warn('Collateral AI extraction fallback:', e.message);
+      throw normalizeGeminiError(e);
     }
   }
 
@@ -466,20 +452,10 @@ CHỈ TRẢ VỀ JSON ARRAY.`;
 export async function chatMultiTurnAI(
   messages: Array<{ role: 'user' | 'model'; content: string }>,
   roleType: 'credit_expert' | 'accounting_advisor' | 'quick_assistant' = 'accounting_advisor',
-  requestedModel?: string
+  requestedModel?: string,
+  apiKey?: string
 ) {
-  // Model selection rules:
-  // "Use gemini-4-argon for particularly complex tasks, gemini-3.8-flash for general tasks, and gemini-3.1-flash-lite for tasks that should happen fast."
-  let model = requestedModel;
-  if (!model) {
-    if (roleType === 'credit_expert') {
-      model = 'gemini-4-argon';
-    } else if (roleType === 'quick_assistant') {
-      model = 'gemini-3.1-flash-lite';
-    } else {
-      model = 'gemini-3.8-flash';
-    }
-  }
+  const model = requestedModel || GEMINI_MODEL;
 
   let systemInstruction = '';
   if (roleType === 'credit_expert') {
@@ -507,15 +483,7 @@ Nhiệm vụ của bạn là phản hồi tức thì, ngắn gọn, chính xác 
 - Giải thích thuật ngữ tài chính ngân hàng tức thì.`;
   }
 
-  const ai = getAI();
-  if (!ai) throw new Error('Chưa cấu hình GEMINI_API_KEY. Không thể phân tích AI.');
-  if (!ai) {
-    return {
-      text: `[Chế độ giải đáp nghiệp vụ mẫu]: Hệ thống đang chạy ở chế độ dự phòng do chưa phát hiện GEMINI_API_KEY trong môi trường. Về câu hỏi của bạn: Đối với nghiệp vụ ${roleType === 'credit_expert' ? 'thẩm định tín dụng và CIC' : 'kế toán công nợ'}, bạn hãy luôn kiểm tra chéo các chứng từ gốc và đối soát định kỳ. Để kích hoạt trí tuệ nhân tạo Gemini toàn diện, vui lòng cấu hình GEMINI_API_KEY trong bảng Secrets của AI Studio.`,
-      modelUsed: model,
-    };
-  }
-
+  const ai = createUserGeminiClient(apiKey);
   const contents = messages.map(m => ({
     role: m.role === 'model' ? 'model' : 'user',
     parts: [{ text: m.content }],
@@ -535,26 +503,6 @@ Nhiệm vụ của bạn là phản hồi tức thì, ngắn gọn, chính xác 
       modelUsed: model,
     };
   } catch (err: any) {
-    console.warn(`Model ${model} encounter error, trying fallback to gemini-2.5-flash:`, err.message);
-    try {
-      const fallbackResponse = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents,
-        config: {
-          systemInstruction,
-          temperature: 0.7,
-        },
-      });
-      return {
-        text: fallbackResponse.text || 'Không có phản hồi từ mô hình.',
-        modelUsed: 'gemini-2.5-flash (dự phòng)',
-      };
-    } catch (e: any) {
-      return {
-        text: `Lỗi kết nối Gemini AI: ${e.message || err.message}`,
-        modelUsed: model,
-      };
-    }
+    throw normalizeGeminiError(err);
   }
 }
-
