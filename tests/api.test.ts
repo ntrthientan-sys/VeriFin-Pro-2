@@ -8,7 +8,7 @@ import { join } from 'node:path';
 
 test('HTTP: authentication, beneficiary permissions, private exports, zero values and missing sessions', async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'verifin-api-'));
-  const child = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], { env: { ...process.env, NODE_ENV: 'production', PORT: '3198', DATA_DIR: dataDir, ADMIN_EMAILS: 'admin@example.test', ADMIN_PASSWORD: 'TestPassword123!', FIREBASE_PROJECT_ID: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
+  const child = spawn(process.execPath, ['--import', 'tsx', 'server.ts'], { env: { ...process.env, NODE_ENV: 'production', PORT: '3198', DATA_DIR: dataDir, ADMIN_EMAILS: 'admin@example.test', ADMIN_PASSWORD: 'Test123', FIREBASE_PROJECT_ID: '' }, stdio: ['ignore', 'pipe', 'pipe'] });
   let logs = '';
   child.stdout.on('data', d => logs += d);
   child.stderr.on('data', d => logs += d);
@@ -26,13 +26,21 @@ test('HTTP: authentication, beneficiary permissions, private exports, zero value
     assert.equal((await request('/api/operations/advisory',{})).status,401);
     let response = await request('/api/auth/register', { name: 'Test', email: 'user@example.test', password: 'Secret123' });
     assert.equal(response.status, 201);
-    const token = (await response.json()).user.token;
+    const regular=await response.json();assert.equal(regular.user.role,'user');assert.equal(regular.firebaseSync,'PENDING');const token=regular.user.token;
     response = await request('/api/settings/bank-account', { bankBin: '970448', accountNo: '48888', accountName: 'TEST' }, token);
     assert.equal(response.status, 403);
     response = await request('/api/auth/register', { name: 'Spoof', email: 'admin@example.test', password: 'Secret123' });
     assert.equal(response.status, 403);
-    response = await request('/api/auth/login', { email: 'admin@example.test', password: 'TestPassword123!' });
-    const admin = (await response.json()).user.token;
+    response = await request('/api/auth/login', { email: ' ADMIN@Example.Test ', password: 'Test123' });
+    const adminBody=await response.json();
+    assert.equal(adminBody.user.role,'admin');
+    assert.equal(adminBody.user.isAdmin,true);
+    assert.equal(adminBody.firebaseSync,'PENDING');
+    const admin=adminBody.user.token;
+    const me=await request('/api/auth/me',undefined,admin);
+    assert.equal((await me.json()).user.role,'admin');
+    assert.equal((await request('/api/auth/register',{name:'Spoof',email:' NTRTHIENTAN@GMAIL.COM ',password:'abcdefg',role:'admin'})).status,403);
+    assert.equal((await request('/api/auth/login',{email:'admin@example.test',password:'wrong'})).status,401);
     response = await request('/api/settings/bank-account', { bankBin: '970448', accountNo: '48888', accountName: 'TEST' }, admin);
     assert.equal(response.status, 200);
     const orderQr=await request('/api/operations/qr',opOrder);

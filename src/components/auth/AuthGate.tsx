@@ -26,7 +26,15 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   return (
     <>
       <div className="flex flex-wrap justify-between gap-2 bg-slate-900 px-4 py-2 text-sm text-white">
-        <span>Tài khoản: {user.email}</span>
+        <span>
+          Tài khoản: {user.email}{" "}
+          {user.firebaseSyncStatus === "PENDING"
+            ? "• Firebase: chờ đồng bộ"
+            : user.firebaseSyncStatus === "CONFLICT"
+              ? "• Firebase: cần xử lý xung đột tài khoản"
+              : ""}{" "}
+          {user.isAdmin ? "• Admin" : ""}
+        </span>
         <button onClick={() => void signOut()} className="underline">
           Đăng xuất tài khoản
         </button>

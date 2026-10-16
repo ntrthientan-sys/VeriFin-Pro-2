@@ -1,3 +1,6 @@
+import { ADMIN_CONFIG, configuredAdminEmails } from './server/config/adminConfig';
+import { normalizeEmail } from './src/utils/authIdentity';
+import { firebaseAdminServices, syncFirebaseAccount, waitForFirebaseSync, type SyncResult } from './server/firebaseAccountService';
 import { adviseOperations } from './server/operationsAdvisor';
 import { SalesOrderSchema } from './src/schemas/inventoryOrderSchema';
 import { generateVietQrDataUrl } from './server/vietQrService';
@@ -298,12 +301,18 @@ async function getAuthenticatedUser(req: express.Request): Promise<UserAccountRe
   // Verify Firebase signature, issuer, audience and expiry on the server.
   if (!process.env.FIREBASE_PROJECT_ID) return null;
   try {
-    const { initializeApp, getApps } = await import('firebase-admin/app');
-    const { getAuth } = await import('firebase-admin/auth');
-    const firebaseApp = getApps()[0] || initializeApp({ projectId: process.env.FIREBASE_PROJECT_ID });
-    const decoded = await getAuth(firebaseApp).verifyIdToken(token);
-    if (!decoded.email || !decoded.email_verified) return null;
-    return { id: decoded.uid, name: decoded.name || decoded.email, email: decoded.email, password: '', branch: 'all', roleTitle: 'Google', createdAt: '' };
+    const services=firebaseAdminServices();if(!services)return null;
+    const decoded=await services.auth.verifyIdToken(token,true);
+    if(!decoded.email)return null;
+    const email=normalizeEmail(decoded.email);
+    const linked=registeredUsers.find(u=>u.firebaseUid===decoded.uid && normalizeEmail(u.email)===email);
+    if(!decoded.email_verified && !linked)return null;
+    const isAdmin=adminEmails.includes(email)&&(decoded.email_verified||linked?.role==='admin');
+    const profile={id:linked?.id||decoded.uid,name:linked?.name||(isAdmin?ADMIN_CONFIG.fullName:decoded.name||email),email,phone:linked?.phone||'',password:'',branch:linked?.branch||'all' as const,roleTitle:isAdmin?ADMIN_CONFIG.department:linked?.roleTitle||'Google',role:isAdmin?'admin' as const:'user' as const,createdAt:linked?.createdAt||''};
+    // Role assignment is server-owned; profile write failure does not turn valid identity into an outage.
+    try{const cloud=await services.auth.getUser(decoded.uid);await services.auth.setCustomUserClaims(decoded.uid,{...cloud.customClaims,admin:isAdmin,role:profile.role});}catch{}
+    void services.db.collection('users').doc(decoded.uid).set({email,role:profile.role,isAdmin,fullName:profile.name,department:profile.roleTitle,updatedAt:(await import('firebase-admin/firestore')).FieldValue.serverTimestamp()},{merge:true}).catch(()=>{});
+    return profile;
   } catch { return null; }
 }
 
@@ -344,8 +353,7 @@ app.post('/api/settings/bank-account', async (req, res) => {
       });
     }
 
-    const admins = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-    if (!admins.includes(user.email.toLowerCase())) return res.status(403).json({ error: 'Chỉ quản trị được cấu hình trong ADMIN_EMAILS có quyền đổi tài khoản thụ hưởng.' });
+    if (user.role !== 'admin') return res.status(403).json({ error: 'Chỉ quản trị được cấu hình trong ADMIN_EMAILS có quyền đổi tài khoản thụ hưởng.' });
     const body = req.body || {};
     if (typeof body.bankBin !== 'string' || !/^\d{6}$/.test(body.bankBin) ||
         typeof body.accountNo !== 'string' || !/^[A-Za-z0-9]{1,34}$/.test(body.accountNo.trim()) ||
@@ -380,6 +388,9 @@ export interface UserAccountRecord {
   email: string;
   phone?: string;
   password: string;
+  role?: 'admin' | 'user';
+  firebaseUid?: string;
+  firebaseSyncStatus?: 'SYNCED' | 'PENDING' | 'CONFLICT';
   branch: 'office' | 'banking' | 'all';
   roleTitle: string;
   createdAt: string;
@@ -399,16 +410,31 @@ function verifyPassword(password: string, stored: string): boolean {
   return expected.length === actual.length && timingSafeEqual(expected, actual);
 }
 
-// Provision the administrator out of band; public registration cannot claim this identity.
-const adminEmails = (process.env.ADMIN_EMAILS || '').split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
-if (adminEmails[0] && process.env.ADMIN_PASSWORD && !registeredUsers.some(u => u.email === adminEmails[0])) {
-  if (process.env.ADMIN_PASSWORD.length < 12) throw new Error('ADMIN_PASSWORD phải có ít nhất 12 ký tự.');
-  registeredUsers.push({ id: randomUUID(), name: 'Quản trị', email: adminEmails[0], password: hashPassword(process.env.ADMIN_PASSWORD), branch: 'all', roleTitle: 'Quản trị hệ thống', createdAt: new Date().toISOString() });
-  saveState('users.json', registeredUsers);
+// Reserved admin identity; credentials are provisioned only by server configuration.
+const adminEmails = configuredAdminEmails();
+const seedEmail=normalizeEmail((process.env.ADMIN_EMAILS||'').split(',')[0]||ADMIN_CONFIG.email);
+if (process.env.ADMIN_PASSWORD && !registeredUsers.some(u => normalizeEmail(u.email) === seedEmail)) {
+  if (process.env.ADMIN_PASSWORD.length < 6 || process.env.ADMIN_PASSWORD.length>256) throw new Error('ADMIN_PASSWORD phải có 6–256 ký tự.');
+  registeredUsers.push({id:randomUUID(),name:ADMIN_CONFIG.fullName,email:seedEmail,password:hashPassword(process.env.ADMIN_PASSWORD),role:'admin',branch:'all',roleTitle:ADMIN_CONFIG.department,createdAt:new Date().toISOString()});
+  saveState('users.json',registeredUsers);
 }
+// Only identities previously reserved by trusted server configuration receive local admin privileges.
+for(const user of registeredUsers) {user.email=normalizeEmail(user.email);user.role=adminEmails.includes(user.email)&&(user.role==='admin'||(user.email===seedEmail&&!!process.env.ADMIN_PASSWORD&&verifyPassword(process.env.ADMIN_PASSWORD,user.password)))?'admin':'user';}
+const syncJobs=new Map<string,Promise<SyncResult>>();
+function syncAccount(user:UserAccountRecord,password?:string,issueToken=false):Promise<SyncResult>{
+ const existing=syncJobs.get(user.id);if(existing)return existing;
+ const job=syncFirebaseAccount(user,password,issueToken).then(result=>{user.firebaseSyncStatus=result.status;if(result.firebaseUid)user.firebaseUid=result.firebaseUid;saveState('users.json',registeredUsers);return result;}).finally(()=>syncJobs.delete(user.id));
+ syncJobs.set(user.id,job);return job;
+}
+// Retry only with a server-held bootstrap secret or an already-bound UID. Never persist plaintext passwords.
+const retryFirebase=()=>{for(const user of registeredUsers){if(user.firebaseSyncStatus==='SYNCED'||user.firebaseSyncStatus==='CONFLICT')continue;const password=user.email===seedEmail&&process.env.ADMIN_PASSWORD&&verifyPassword(process.env.ADMIN_PASSWORD,user.password)?process.env.ADMIN_PASSWORD:undefined;if(password||user.firebaseUid)void syncAccount(user,password).catch(()=>{});}};
+retryFirebase();setInterval(retryFirebase,60000).unref();
+
+const authAttempts=new Map<string,{count:number;expiresAt:number}>();
+app.use(['/api/auth/login','/api/auth/register'],(req,res,next)=>{const now=Date.now();for(const [key,value] of authAttempts)if(value.expiresAt<=now)authAttempts.delete(key);const key=req.ip||'unknown';const entry=authAttempts.get(key)||{count:0,expiresAt:now+15*60000};if(entry.count>=30||(!authAttempts.has(key)&&authAttempts.size>=10000)){res.setHeader('Retry-After','900');return res.status(429).json({error:'Quá nhiều lần xác thực. Vui lòng thử lại sau.'});}entry.count++;authAttempts.set(key,entry);next();});
 
 // 1. API Đăng Ký Tài Khoản Mới
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, phone, password, branch, roleTitle } = req.body || {};
     
@@ -422,13 +448,13 @@ app.post('/api/auth/register', (req, res) => {
       return res.status(400).json({ error: 'Mật khẩu phải có tối thiểu 6 ký tự để đảm bảo bảo mật.' });
     }
 
-    const cleanEmail = email.trim().toLowerCase();
+    const cleanEmail = normalizeEmail(email);
     if (adminEmails.includes(cleanEmail)) return res.status(403).json({ error: 'Email dành cho quản trị. Liên hệ người vận hành hệ thống.' });
     const cleanPhone = typeof phone === 'string' ? phone.trim() : '';
 
     // Check existing
     const existing = registeredUsers.find(
-      (u) => u.email.toLowerCase() === cleanEmail || (cleanPhone && u.phone === cleanPhone)
+      (u) => normalizeEmail(u.email) === cleanEmail || (cleanPhone && u.phone === cleanPhone)
     );
     if (existing) {
       return res.status(400).json({
@@ -442,6 +468,7 @@ app.post('/api/auth/register', (req, res) => {
       email: cleanEmail,
       phone: cleanPhone,
       password: hashPassword(password),
+      role: 'user',
       branch: branch === 'banking' ? 'banking' : branch === 'office' ? 'office' : 'all',
       roleTitle: (typeof roleTitle === 'string' && roleTitle.trim()) || (branch === 'banking' ? 'Chuyên viên Ngân Hàng' : branch === 'office' ? 'Kế toán & Hành chính' : 'Quản Lý Điều Hành'),
       createdAt: new Date().toISOString(),
@@ -449,6 +476,7 @@ app.post('/api/auth/register', (req, res) => {
 
     saveState('users.json', [...registeredUsers, newUser]);
     registeredUsers.push(newUser);
+    const firebaseSync=await waitForFirebaseSync(syncAccount(newUser,password,true));
 
     const token = randomBytes(32).toString('hex');
     activeSessions.set(token, {
@@ -458,6 +486,8 @@ app.post('/api/auth/register', (req, res) => {
 
     const sessionUser = {
       id: newUser.id,
+      role: newUser.role,
+      isAdmin: newUser.role==='admin',
       name: newUser.name,
       email: newUser.email,
       phone: newUser.phone,
@@ -471,6 +501,8 @@ app.post('/api/auth/register', (req, res) => {
       success: true,
       message: 'Đăng ký tài khoản thành công! Đã tự động đăng nhập.',
       user: sessionUser,
+      firebaseSync: firebaseSync.status,
+      firebaseCustomToken: firebaseSync.customToken,
     });
   } catch (err: any) {
     return res.status(err.status || 500).json({ code: err.code, error: redactSensitiveLog(err) || 'Lỗi trong quá trình đăng ký tài khoản' });
@@ -478,12 +510,12 @@ app.post('/api/auth/register', (req, res) => {
 });
 
 // 2. API Đăng Nhập Tài Khoản
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   try {
     const { emailOrPhone, email, phone, password } = req.body || {};
     const identifier = emailOrPhone || email || phone || '';
     if (typeof identifier !== 'string' || typeof password !== 'string' || password.length > 256) return res.status(400).json({ error: 'Thông tin đăng nhập không hợp lệ.' });
-    const inputIdentifier = identifier.trim().toLowerCase();
+    const inputIdentifier = normalizeEmail(identifier);
     const inputPass = String(password || '');
 
     if (!inputIdentifier) {
@@ -496,7 +528,7 @@ app.post('/api/auth/login', (req, res) => {
     // Find in registered users
     const matched = registeredUsers.find(
       (u) =>
-        u.email.toLowerCase() === inputIdentifier ||
+        normalizeEmail(u.email) === inputIdentifier ||
         (u.phone && u.phone === inputIdentifier)
     );
 
@@ -507,6 +539,7 @@ app.post('/api/auth/login', (req, res) => {
         });
       }
 
+      const firebaseSync=await waitForFirebaseSync(syncAccount(matched,inputPass,true));
       const token = randomBytes(32).toString('hex');
       activeSessions.set(token, {
         userId: matched.id,
@@ -515,6 +548,8 @@ app.post('/api/auth/login', (req, res) => {
 
       const sessionUser = {
         id: matched.id,
+        role: matched.role,
+        isAdmin: matched.role==='admin',
         name: matched.name,
         email: matched.email,
         phone: matched.phone,
@@ -527,6 +562,8 @@ app.post('/api/auth/login', (req, res) => {
         success: true,
         message: 'Đăng nhập thành công',
         user: sessionUser,
+      firebaseSync: firebaseSync.status,
+      firebaseCustomToken: firebaseSync.customToken,
       });
     }
 
@@ -553,6 +590,9 @@ app.get('/api/auth/me', async (req, res) => {
     authenticated: true,
     user: {
       id: user.id,
+      role: user.role||'user',
+      isAdmin: user.role==='admin',
+      firebaseSyncStatus:user.firebaseSyncStatus,
       name: user.name,
       email: user.email,
       phone: user.phone,

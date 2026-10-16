@@ -12,7 +12,7 @@ service cloud.firestore {
     }
 
     function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
+      return isSignedIn() && (request.auth.uid == userId || request.auth.token.get('admin', false) == true);
     }
 
     function isValidId(id) {
@@ -28,8 +28,12 @@ service cloud.firestore {
     match /users/{userId} {
       allow get: if isOwner(userId);
       allow list: if isOwner(userId);
-      allow create, update: if isOwner(userId) && isValidId(userId);
-      allow delete: if isOwner(userId);
+      // Roles and local identity links are written only by trusted Admin SDK.
+      allow create: if isOwner(userId) && isValidId(userId)
+        && !request.resource.data.keys().hasAny(['role', 'isAdmin', 'admin', 'localUserId']);
+      allow update: if isOwner(userId) && isValidId(userId)
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'isAdmin', 'admin', 'localUserId', 'email', 'userId']);
+      allow delete: if false;
 
       // Settings subcollection (e.g. bank account config)
       match /settings/{settingId} {

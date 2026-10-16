@@ -1,9 +1,12 @@
+import {normalizeEmail,firebaseAuthMessage} from './utils/authIdentity';
 import { redactSensitiveLog } from './utils/redaction';
 import { initializeApp, getApps } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithEmailAndPassword,
+  signInWithCustomToken,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   User as FirebaseUser,
@@ -25,12 +28,15 @@ import {
 import firebaseConfig from '../firebase-applet-config.json';
 
 // Initialize Firebase App
-const configuredKey = import.meta.env.VITE_FIREBASE_API_KEY;
-const app = configuredKey ? (getApps()[0] || initializeApp({...firebaseConfig,apiKey:configuredKey})) : null;
+const configuredKey = import.meta.env.VITE_FIREBASE_API_KEY?.trim();
+let initializationError:unknown;
+let app:ReturnType<typeof initializeApp>|null=null;
+try {if(configuredKey)app=getApps()[0]||initializeApp({...firebaseConfig,apiKey:configuredKey,projectId:import.meta.env.VITE_FIREBASE_PROJECT_ID||firebaseConfig.projectId,authDomain:import.meta.env.VITE_FIREBASE_AUTH_DOMAIN||firebaseConfig.authDomain});}catch(error){initializationError=error;}
 
 // CRITICAL: getFirestore must pass firestoreDatabaseId as required by AI Studio
-export const db = app ? getFirestore(app, firebaseConfig.firestoreDatabaseId) : null;
-export const auth = app ? getAuth(app) : null;
+export let db:ReturnType<typeof getFirestore>|null=null;
+export let auth:ReturnType<typeof getAuth>|null=null;
+try{if(app){auth=getAuth(app);db=getFirestore(app,import.meta.env.VITE_FIREBASE_DATABASE_ID||firebaseConfig.firestoreDatabaseId);}}catch(error){initializationError=error;auth=null;db=null;}
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
 
@@ -45,7 +51,7 @@ export async function testFirestoreConnection() {
     }
   }
 }
-testFirestoreConnection();
+// Connection checks run on demand, not before account authentication.
 
 // Error handler conforming to FirestoreErrorInfo
 export enum OperationType {
@@ -81,12 +87,11 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
 
 // Google Sign-In with Popup
 export async function signInWithGoogle() {
-  if (!auth) throw new Error('Google Sign-In chưa được cấu hình. Vui lòng dùng đăng nhập email.');
+  if (!auth) throw Object.assign(new Error(firebaseAuthMessage(initializationError||{code:'auth/not-configured'})),{code:(initializationError as any)?.code||'auth/not-configured'});
   try {
     const result = await signInWithPopup(auth, googleProvider);
     const user = result.user;
-    // Sync to Firestore user profile
-    await syncUserProfile(user);
+    // Server validates the ID token and owns role/profile provisioning.
     return user;
   } catch (error) {
     console.error('Google Sign-In Error:', redactSensitiveLog(error));
@@ -107,13 +112,13 @@ export async function syncUserProfile(user: FirebaseUser, extra?: { branch?: str
     const existing = await getDoc(userRef);
     const data = {
       userId: user.uid,
-      email: user.email || '',
+      email: normalizeEmail(user.email || ''),
       displayName: user.displayName || user.email?.split('@')[0] || 'Chuyên viên VeriFin',
       photoURL: user.photoURL || '',
       branch: extra?.branch || existing.data()?.branch || 'all',
       roleTitle: extra?.roleTitle || existing.data()?.roleTitle || 'Chuyên viên Tài Chính & Kế Toán',
-      updatedAt: new Date().toISOString(),
-      createdAt: existing.data()?.createdAt || new Date().toISOString(),
+      updatedAt: serverTimestamp(),
+      createdAt: existing.data()?.createdAt || serverTimestamp(),
     };
     await setDoc(userRef, data, { merge: true });
     return data;
@@ -214,4 +219,14 @@ export async function getSessionMessages(userId: string, sessionId: string): Pro
     handleFirestoreError(err, OperationType.LIST, `users/${userId}/chatSessions/${sessionId}/messages`);
     return [];
   }
+}
+
+/** Email sign-in first when configured; only local server credentials may authorize fallback. */
+export async function signInFirebaseEmail(email:string,password:string){
+ if(!auth)throw Object.assign(new Error(firebaseAuthMessage({code:'auth/not-configured'})),{code:'auth/not-configured'});
+ return (await signInWithEmailAndPassword(auth,normalizeEmail(email),password)).user;
+}
+export async function acceptFirebaseCustomSession(customToken?:string){
+ if(!customToken||!auth)return false;
+ await signInWithCustomToken(auth,customToken);return true;
 }

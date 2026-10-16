@@ -18,6 +18,9 @@ const userSchema = z.object({
   phone: z.string().optional(),
   branch: z.enum(["office", "banking", "all"]),
   roleTitle: z.string(),
+  role: z.enum(["admin", "user"]).optional(),
+  isAdmin: z.boolean().optional(),
+  firebaseSyncStatus: z.enum(["SYNCED", "PENDING", "CONFLICT"]).optional(),
 });
 interface AuthContextValue {
   user: UserSession | null;
@@ -47,7 +50,21 @@ export async function verifyAccountSession(
   const data = await response.json();
   if (!response.ok || data.authenticated !== true)
     throw new Error("Phiên đăng nhập không hợp lệ hoặc đã hết hạn.");
-  return { ...userSchema.parse(data.user), token };
+  const profile = userSchema.parse(data.user);
+  // Server may just have assigned custom claims for a verified Google administrator.
+  if (profile.isAdmin && token.split(".").length === 3) {
+    try {
+      const firebase = await import("../../firebase");
+      if (
+        firebase.auth?.currentUser?.email?.trim().toLowerCase() ===
+        profile.email.trim().toLowerCase()
+      )
+        token = await firebase.auth.currentUser.getIdToken(true);
+    } catch {
+      /* Local server sessions do not need Firebase. */
+    }
+  }
+  return { ...profile, token };
 }
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<UserSession | null>(null),
