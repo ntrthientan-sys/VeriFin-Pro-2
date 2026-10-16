@@ -1,3 +1,5 @@
+import { AuthProvider, useAuth } from './components/auth/AuthProvider';
+import { AuthGate } from './components/auth/AuthGate';
 import { ApiKeyGate } from './components/auth/ApiKeyGate';
 import { createEmptyEvidenceEnvelope, evaluateFailClosedGate } from './schemas/evidenceSchema';
 import { runDeterministicUnderwritingEngine } from './engine/underwritingDerivations';
@@ -88,7 +90,7 @@ import { BankAccountConfigModule, formatTransferSyntax } from './BankAccountConf
 import { CreatorCoffeeCard, CreatorCoffeeModal } from './CreatorCoffeeCard';
 import { AuthModal } from './AuthModal';
 import { GeminiChatbotModule } from './GeminiChatbotModule';
-import { auth, signInWithGoogle, logOutFirebase } from './firebase';
+import { signInWithGoogle } from './firebase';
 
 export type BusinessBranch = 'office' | 'banking' | 'all';
 
@@ -100,6 +102,7 @@ export type TabKey =
   | 'debt'
   | 'reconcile'
   | 'payslip'
+  | 'operations'
   | 'orders'
   | 'documents'
   | 'cashflow'
@@ -121,95 +124,25 @@ export interface UserSession {
   loginAt?: string;
 }
 
+const REAOperationsWorkspace = lazy(() => import('./components/operations/REAOperationsWorkspace'));
 const ProposalEvidencePanel = lazy(() => import('./components/evidence/ProposalEvidencePanel'));
 
-export default function App() { return <ApiKeyGate><VeriFinApplication /></ApiKeyGate>; }
+export default function App() { return <AuthProvider><AuthGate><ApiKeyGate><VeriFinApplication /></ApiKeyGate></AuthGate></AuthProvider>; }
 
 function VeriFinApplication() {
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
-  // User Profile & Authentication State
-  const [user, setUser] = useState<UserSession>(() => {
-    try {
-      const authSaved = localStorage.getItem('applet_auth_user');
-      if (authSaved) return JSON.parse(authSaved);
-      const saved = localStorage.getItem('excel_ai_agent_user');
-      if (saved) return JSON.parse(saved);
-    } catch {}
-    return {
-      id: 'usr_guest', name: 'Chưa đăng nhập', email: '', branch: 'office', roleTitle: 'Khách sử dụng',
-    };
-  });
+  const {user: authenticatedUser, updateProfile: setUser, signIn: acceptSession} = useAuth();
+  const user = authenticatedUser!;
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showCoffeeModal, setShowCoffeeModal] = useState(false);
   const [showChatWindow, setShowChatWindow] = useState(false);
-
-  // Sync Firebase Authentication state
-  useEffect(() => {
-    if (!auth) return;
-    const unsubscribe = auth.onAuthStateChanged(async (fbUser) => {
-      if (fbUser) {
-        try {
-          const token = await fbUser.getIdToken();
-          setUser((prev) => ({
-            id: fbUser.uid,
-            name: fbUser.displayName || fbUser.email?.split('@')[0] || 'Chuyên viên VeriFin',
-            email: fbUser.email || '',
-            phone: fbUser.phoneNumber || prev.phone || '',
-            branch: prev.branch || 'all',
-            roleTitle: prev.roleTitle || 'Xác thực Google (Firebase)',
-            token,
-            loginAt: new Date().toISOString(),
-          }));
-          localStorage.setItem('applet_auth_token', token);
-        } catch (e) {
-          console.error('Error in onAuthStateChanged:', redactSensitiveLog(e));
-        }
-      }
-    });
-    return () => unsubscribe();
-  }, []);
-
   const handleGoogleSignInDirect = async () => {
     try {
-      const gUser = await signInWithGoogle();
-      const token = await gUser.getIdToken();
-      const verifiedUser: UserSession = {
-        id: gUser.uid,
-        name: gUser.displayName || gUser.email?.split('@')[0] || 'Chuyên viên VeriFin',
-        email: gUser.email || '',
-        phone: gUser.phoneNumber || '',
-        branch: user.branch || 'all',
-        roleTitle: 'Chuyên viên Xác thực Google',
-        token,
-        loginAt: new Date().toISOString(),
-      };
-      setUser(verifiedUser);
-      localStorage.setItem('applet_auth_user', JSON.stringify(verifiedUser));
-      localStorage.setItem('applet_auth_token', token);
-    } catch (e) {
-      console.error('Direct Google Sign-in error:', redactSensitiveLog(e));
-    }
-  };
-
-  const handleLogout = async () => {
-    const token = localStorage.getItem('applet_auth_token');
-    await fetch('/api/auth/logout', { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {} });
-    await logOutFirebase().catch(error => console.error(redactSensitiveLog(error)));
-    localStorage.removeItem('applet_auth_token');
-    localStorage.removeItem('applet_auth_user');
-    localStorage.removeItem('excel_ai_agent_user');
-    const resetUser: UserSession = {
-      id: 'usr_guest',
-      name: 'Chưa đăng nhập',
-      email: '',
-      branch: user.branch || 'all',
-      roleTitle: 'Khách sử dụng',
-      loginAt: new Date().toISOString(),
-    };
-    setUser(resetUser);
-    localStorage.setItem('applet_auth_user', JSON.stringify(resetUser));
+      const googleUser = await signInWithGoogle();
+      await acceptSession({...user, token: await googleUser.getIdToken()});
+    } catch(error) { console.error(redactSensitiveLog(error)); }
   };
 
   const handleSwitchBranch = (newBranch: BusinessBranch) => {
@@ -228,7 +161,7 @@ function VeriFinApplication() {
 
     // If active tab belongs to a hidden category, redirect cleanly to a valid tab
     const bankingTabs: TabKey[] = ['statement', 'cic', 'portfolio', 'collateral', 'proposal', 'income'];
-    const officeTabs: TabKey[] = ['debt', 'reconcile', 'payslip', 'orders', 'documents', 'cashflow'];
+    const officeTabs: TabKey[] = ['debt', 'reconcile', 'payslip', 'orders', 'operations', 'documents', 'cashflow'];
     if (newBranch === 'office' && bankingTabs.includes(activeTab)) {
       setActiveTab('debt');
     } else if (newBranch === 'banking' && officeTabs.includes(activeTab)) {
@@ -236,14 +169,14 @@ function VeriFinApplication() {
     }
   };
 
-  const handleSaveUser = (updatedUser: UserSession) => {
-    setUser(updatedUser);
+  const handleSaveUser = async (updatedUser: UserSession) => {
+    await acceptSession(updatedUser);
     localStorage.setItem('excel_ai_agent_user', JSON.stringify(updatedUser));
     setShowLoginModal(false);
 
     // Apply auto branch tab redirect if needed
     const bankingTabs: TabKey[] = ['statement', 'cic', 'portfolio', 'collateral', 'proposal', 'income'];
-    const officeTabs: TabKey[] = ['debt', 'reconcile', 'payslip', 'orders', 'documents', 'cashflow'];
+    const officeTabs: TabKey[] = ['debt', 'reconcile', 'payslip', 'orders', 'operations', 'documents', 'cashflow'];
     if (updatedUser.branch === 'office' && bankingTabs.includes(activeTab)) {
       setActiveTab('debt');
     } else if (updatedUser.branch === 'banking' && officeTabs.includes(activeTab)) {
@@ -552,6 +485,7 @@ function VeriFinApplication() {
                 )}
               </div>
               <nav className="space-y-1 text-xs font-medium">
+                <button onClick={() => setActiveTab('operations')} className="w-full text-left px-3 py-2.5 rounded-xl bg-indigo-900 text-indigo-100">Kho • Đơn hàng • Hóa đơn REA</button>
                 <button
                   onClick={() => setActiveTab('debt')}
                   className={`w-full text-left px-3 py-2.5 rounded-xl transition-all flex items-center gap-2.5 ${
@@ -850,6 +784,7 @@ function VeriFinApplication() {
         {activeTab === 'reconcile' && <ReconcileModule />}
         {activeTab === 'payslip' && <PayslipModule />}
         {activeTab === 'orders' && <OrdersModule />}
+        {activeTab === 'operations' && <Suspense fallback={<p>Đang tải điều hành kho…</p>}><REAOperationsWorkspace key={user.id || user.email} userId={user.id || user.email || 'guest'} /></Suspense>}
         {activeTab === 'documents' && <DocumentsModule />}
         {activeTab === 'cashflow' && <CashFlowForecastModule />}
         {activeTab === 'statement' && <StatementModule />}

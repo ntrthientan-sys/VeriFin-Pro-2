@@ -127,3 +127,19 @@ Kiểm tra: `npm run lint`, `npm run build`, `npm test` (7 test gồm kiểm th�
 ### Kho và đơn hàng — Phase 1–2
 
 Đã bổ sung schema Zod, dữ liệu mẫu có nhãn và engine tất định cho tồn kho, giá vốn, ABC, đề xuất nhập hàng, kiểm soát đơn/hóa đơn và Evidence vận hành. Đây là nền tảng code; màn hình quản lý kho/đơn hàng chưa nằm trong Phase 1–2. Xem [hợp đồng nghiệp vụ và cách dùng](docs/operations-phase-1-2.md).
+
+### Giao diện vận hành — Phase 3–4
+
+Vào **Văn phòng → Kho • Đơn hàng • Hóa đơn REA** để quản lý SKU, nhập hàng, đơn, thu/hoàn tiền, metadata hóa đơn, ABC và kế hoạch vốn. Gemini dùng BYOK đã xác thực; tư vấn quy tắc có nút riêng. VietQR dùng thụ hưởng server, không dùng tài khoản mẫu. Dữ liệu lưu trên thiết bị bằng IndexedDB, chưa đồng bộ nhiều máy. Xem [hướng dẫn và giới hạn Phase 3–4](docs/operations-phase-3-4.md).
+
+### BYOK trên điện thoại
+
+Gate làm sạch ký tự ẩn/khoảng trắng, tiền tố `.env`/Bearer, dấu nháy trước khi kiểm tra; phục hồi Base64 một hoặc hai lớp, chỉ lưu lại một lớp sau xác thực. Có nút Hiện/Ẩn và tắt tự viết hoa/sửa chính tả. Regex 35–45 ký tự là kiểm tra sơ bộ, không chứng minh key thật.
+
+Theo yêu cầu cập nhật, Gate gọi `GET /v1beta/models?pageSize=5` trực tiếp tới Google, truyền key bằng `x-goog-api-key` (không qua query URL). Đây là kiểm tra quyền liệt kê model, không xác nhận quota/quyền sinh nội dung của từng model; các call AI tiếp tục fail-closed khi provider từ chối. Lỗi 400/401/403/429/mạng/timeout không mở Gate. Key lưu sẵn vẫn phải được kiểm tra trực tiếp mỗi lần mở app.
+
+### Thứ tự xác thực bắt buộc
+
+`AuthProvider → AuthGate → ApiKeyGate → Workspace`. Người dùng phải đăng nhập/đăng ký trước. `/api/auth/me` kiểm chứng token với server cả khi mở lại app; hồ sơ hoặc cờ đăng nhập lưu cục bộ không mở khóa ứng dụng. Với tài khoản Google, backend còn kiểm tra Firebase token và email đã xác minh theo cấu hình hiện có. Không có chức năng xác minh email OTP mới cho tài khoản đăng ký nội bộ.
+
+Chỉ sau xác thực tài khoản mới mount BYOK và gọi Google kiểm tra key. Đăng xuất khóa workspace ngay cả khi mạng lỗi; đổi tài khoản xóa key cũ. Phiên được kiểm tra lại khi cửa sổ lấy focus và mỗi 60 giây; phiên hết hạn/lỗi xác minh yêu cầu đăng nhập lại. Đây là guard giao diện, không thay thế phân quyền tại từng API. Luồng đăng nhập không còn ghi phiên hoặc báo mở khóa trước khi server xác nhận.

@@ -1,3 +1,6 @@
+import { adviseOperations } from './server/operationsAdvisor';
+import { SalesOrderSchema } from './src/schemas/inventoryOrderSchema';
+import { generateVietQrDataUrl } from './server/vietQrService';
 import { z } from 'zod';
 import { getRequestGeminiKey, verifyRequestKeyLive } from './server/userGeminiKey';
 import { extractDocumentEvidence } from './server/evidenceService';
@@ -77,7 +80,7 @@ app.use('/api', (req, res, next) => {
 });
 
 // Gemini credentials belong exclusively to this request; never stored on the server.
-const byokRoutes = new Set(['/api/ai/extract-batch', '/api/bank/cic-bctc-extract', '/api/bank/collateral-ltv', '/api/chat/message', '/api/evidence/extract', '/api/bank/credit-proposal']);
+const byokRoutes = new Set(['/api/operations/advisory','/api/ai/extract-batch', '/api/bank/cic-bctc-extract', '/api/bank/collateral-ltv', '/api/chat/message', '/api/evidence/extract', '/api/bank/credit-proposal']);
 app.use((req, res, next) => {
   if (!byokRoutes.has(req.path)) return next();
   try { getRequestGeminiKey(req); next(); }
@@ -303,6 +306,28 @@ async function getAuthenticatedUser(req: express.Request): Promise<UserAccountRe
     return { id: decoded.uid, name: decoded.name || decoded.email, email: decoded.email, password: '', branch: 'all', roleTitle: 'Google', createdAt: '' };
   } catch { return null; }
 }
+
+// Operations uses the configured beneficiary; no account override is accepted.
+app.post('/api/operations/qr', async (req,res)=>{
+  try {
+    const order=SalesOrderSchema.parse(req.body);
+    if(['CANCELLED','RETURNED'].includes(order.fulfillmentStatus)||order.paidAmount>=order.grandTotalAmount) return res.status(400).json({error:'Đơn không còn khoản phải thu hợp lệ.'});
+    if(!activeBankAccount.accountName.trim()) return res.status(400).json({error:'Chưa cấu hình tài khoản thụ hưởng.'});
+    const amountToCollect=order.grandTotalAmount-order.paidAmount;
+    const transferMemo=`VF ${order.id.replace(/[^a-zA-Z0-9]/g,'').slice(-40)}`;
+    const qrImageUrl=await generateVietQrDataUrl({bankBin:activeBankAccount.bankBin,accountNo:activeBankAccount.accountNo,accountName:activeBankAccount.accountName,amount:amountToCollect,message:transferMemo});
+    res.json({qrImageUrl,amountToCollect,transferMemo,bankConfig:{bankBin:activeBankAccount.bankBin,accountNo:activeBankAccount.accountNo,accountName:activeBankAccount.accountName}});
+  }catch(error){res.status(400).json({error:redactSensitiveLog(error)});}
+});
+const operationsAiInFlight=new Set<string>();
+app.post('/api/operations/advisory',async(req,res)=>{
+  const owner=requestOwner.getStore()!;
+  if(operationsAiInFlight.has(owner))return res.status(429).json({error:'Đang xử lý một yêu cầu AI. Hãy chờ hoàn tất.'});
+  operationsAiInFlight.add(owner);
+  try {res.json(await adviseOperations(req.body,getRequestGeminiKey(req),GEMINI_MODEL));}
+  catch(error:any){res.status(error instanceof z.ZodError?400:error.status||502).json({error:redactSensitiveLog(error),code:error.code});}
+  finally{operationsAiInFlight.delete(owner);}
+});
 
 // API Lấy thông tin tài khoản thụ hưởng để trích xuất khi tạo QR
 app.get('/api/settings/bank-account', (_req, res) => {

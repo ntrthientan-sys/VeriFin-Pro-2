@@ -5,6 +5,7 @@ import {
   clearUserApiKey,
   getStoredUserApiKey,
   saveVerifiedApiKey,
+  sanitizeGeminiApiKey,
   verifyGeminiApiKeyLive,
   type KeyVerificationResult,
 } from "../../services/apiKeyManager";
@@ -14,6 +15,7 @@ type State = "CHECKING" | "LOCKED" | "VERIFIED";
 export function ApiKeyGate({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<State>("CHECKING");
   const [candidate, setCandidate] = useState("");
+  const [showKey, setShowKey] = useState(false);
   const [remember, setRemember] = useState(true);
   const [result, setResult] = useState<KeyVerificationResult | null>(null);
   const [error, setError] = useState("");
@@ -25,6 +27,7 @@ export function ApiKeyGate({ children }: { children: React.ReactNode }) {
       revision.current++;
       setState("LOCKED");
       setCandidate("");
+      setShowKey(false);
       setResult(null);
       setError("API key đã bị xóa hoặc mất hiệu lực. Vui lòng kiểm tra lại.");
     };
@@ -48,6 +51,7 @@ export function ApiKeyGate({ children }: { children: React.ReactNode }) {
         }
         try {
           const persistent =
+            window.sessionStorage.getItem(API_KEY_STORAGE_NAME) === null &&
             window.localStorage.getItem(API_KEY_STORAGE_NAME) !== null;
           saveVerifiedApiKey(stored, persistent);
           setState("VERIFIED");
@@ -72,14 +76,16 @@ export function ApiKeyGate({ children }: { children: React.ReactNode }) {
     const check = await verifyGeminiApiKeyLive(candidate);
     if (revision.current !== epoch) return;
     setResult(check);
+    setCandidate(check.sanitizedKey);
     if (!check.valid) {
       setState("LOCKED");
       setError(check.errorMessage || "Không xác minh được key.");
       return;
     }
     try {
-      saveVerifiedApiKey(candidate, remember);
+      saveVerifiedApiKey(check.sanitizedKey, remember);
       setCandidate("");
+      setShowKey(false);
       setState("VERIFIED");
     } catch (err) {
       setState("LOCKED");
@@ -142,15 +148,40 @@ export function ApiKeyGate({ children }: { children: React.ReactNode }) {
           <input
             autoComplete="off"
             spellCheck={false}
-            type="password"
+            type={showKey ? "text" : "password"}
+            autoCapitalize="none"
+            autoCorrect="off"
+            inputMode="text"
+            onPaste={(event) => {
+              event.preventDefault();
+              setCandidate(
+                sanitizeGeminiApiKey(event.clipboardData.getData("text")),
+              );
+              setError("");
+            }}
             value={candidate}
-            onChange={(event) => setCandidate(event.target.value)}
+            onChange={(event) => {
+              setCandidate(event.target.value);
+              setError("");
+            }}
             disabled={state === "CHECKING"}
             className="mt-2 w-full rounded-lg bg-slate-800 p-3"
             placeholder="AIza…"
             required
           />
         </label>
+        <button
+          type="button"
+          aria-pressed={showKey}
+          onClick={() => setShowKey(!showKey)}
+          className="min-h-11 rounded-lg border border-slate-600 px-4"
+        >
+          {showKey ? "Ẩn API key" : "Hiện API key"}
+        </button>
+        <p className="text-xs text-slate-400">
+          Kiểm tra danh sách model xác nhận quyền truy cập API; không đảm bảo
+          quota sinh nội dung của từng model.
+        </p>
         <label className="flex items-center gap-2 text-sm">
           <input
             type="checkbox"

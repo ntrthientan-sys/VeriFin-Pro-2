@@ -1,6 +1,19 @@
 import { redactSensitiveLog } from "../utils/redaction";
 
-export const GEMINI_KEY_REGEX = /^AIza[0-9A-Za-z-_]{35}$/;
+import {
+  GEMINI_KEY_REGEX,
+  sanitizeGeminiApiKey,
+  validateGeminiApiKeyFormat,
+  encodeKeyForStorage,
+  decodeKeyFromStorage,
+} from "../utils/geminiApiKey";
+export {
+  GEMINI_KEY_REGEX,
+  sanitizeGeminiApiKey,
+  validateGeminiApiKeyFormat,
+  encodeKeyForStorage,
+  decodeKeyFromStorage,
+} from "../utils/geminiApiKey";
 export const API_KEY_STORAGE_NAME = "verifin:gemini-user-key:v1";
 export const API_KEY_INVALIDATED_EVENT = "verifin:apikey-invalidated";
 export const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
@@ -9,12 +22,15 @@ let activeKey: string | undefined;
 let generation = 0;
 export interface KeyVerificationResult {
   valid: boolean;
+  ok: boolean;
+  sanitizedKey: string;
   maskedKey: string;
   latencyMs: number;
-  errorMessage?: string;
+  errorMessage: string | null;
 }
 
 export function maskApiKey(key: string): string {
+  key = sanitizeGeminiApiKey(key);
   return GEMINI_KEY_REGEX.test(key)
     ? `${key.slice(0, 6)}••••••••${key.slice(-4)}`
     : "••••••••";
@@ -27,7 +43,7 @@ export function getStoredUserApiKey(): string | null {
     try {
       const encoded = window[storageName].getItem(API_KEY_STORAGE_NAME);
       if (!encoded) continue;
-      const key = atob(encoded);
+      const key = decodeKeyFromStorage(encoded);
       if (GEMINI_KEY_REGEX.test(key)) return key;
       window[storageName].removeItem(API_KEY_STORAGE_NAME);
     } catch {
@@ -38,7 +54,7 @@ export function getStoredUserApiKey(): string | null {
 }
 
 export function saveVerifiedApiKey(rawKey: string, rememberMe = true): void {
-  const key = rawKey.trim();
+  const key = sanitizeGeminiApiKey(rawKey);
   if (!GEMINI_KEY_REGEX.test(key) || !verified.has(key))
     throw new Error("UNVERIFIED_USER_API_KEY");
   const target = rememberMe ? window.localStorage : window.sessionStorage;
@@ -46,7 +62,7 @@ export function saveVerifiedApiKey(rawKey: string, rememberMe = true): void {
   try {
     // Remove the previous persistent key even when switching to session-only mode.
     other.removeItem(API_KEY_STORAGE_NAME);
-    target.setItem(API_KEY_STORAGE_NAME, btoa(key));
+    target.setItem(API_KEY_STORAGE_NAME, encodeKeyForStorage(key));
     activeKey = key;
   } catch {
     activeKey = undefined;
@@ -86,9 +102,10 @@ export function invalidateApiKeyIfCurrent(key: string): void {
 
 export async function verifyGeminiApiKeyLive(
   candidateKey: string,
-  modelName = DEFAULT_GEMINI_MODEL,
+  _modelName = DEFAULT_GEMINI_MODEL,
 ): Promise<KeyVerificationResult> {
-  const key = candidateKey.trim();
+  const formatCheck = validateGeminiApiKeyFormat(candidateKey);
+  const key = formatCheck.sanitizedKey;
   const started = performance.now();
   const epoch = generation;
   const outcome = (
@@ -96,37 +113,34 @@ export async function verifyGeminiApiKeyLive(
     errorMessage?: string,
   ): KeyVerificationResult => ({
     valid,
+    ok: valid,
+    sanitizedKey: key,
     maskedKey: maskApiKey(key),
     latencyMs: Math.max(0, Math.round(performance.now() - started)),
-    ...(errorMessage ? { errorMessage: redactSensitiveLog(errorMessage) } : {}),
+    errorMessage: errorMessage ? redactSensitiveLog(errorMessage) : null,
   });
-  if (!GEMINI_KEY_REGEX.test(key))
-    return outcome(false, "API key không đúng định dạng Google AI Studio.");
-  if (!/^[a-zA-Z0-9._-]+$/.test(modelName))
-    return outcome(false, "Tên model không hợp lệ.");
+  if (!formatCheck.isValid) return outcome(false, formatCheck.errorMessage!);
   verified.delete(key);
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15000);
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelName)}:generateContent`,
+      "https://generativelanguage.googleapis.com/v1beta/models?pageSize=5",
       {
-        method: "POST",
+        method: "GET",
         signal: controller.signal,
-        headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: "ping" }] }],
-          generationConfig: { maxOutputTokens: 1 },
-        }),
+        headers: { Accept: "application/json", "x-goog-api-key": key },
       },
     );
     const body = await response.json().catch(() => null);
-    if (!response.ok || !body || body.error || !(body.usageMetadata || (Array.isArray(body.candidates) && body.candidates.length))) {
+    if (!response.ok || !body || body.error || !Array.isArray(body.models)) {
       const reason =
         response.status === 429
           ? "Key đã hết quota hoặc bị giới hạn tốc độ. Chưa thể mở khóa."
-          : response.status === 401 || response.status === 403
-            ? "Key không hợp lệ hoặc không có quyền sử dụng model."
+          : response.status === 400 ||
+              response.status === 401 ||
+              response.status === 403
+            ? `Google từ chối API key (${response.status}). Key có thể bị thu hồi hoặc giới hạn IP/Referrer.`
             : "Không xác minh được key với Gemini. Kiểm tra model, kết nối và quyền sử dụng.";
       return outcome(false, reason);
     }

@@ -1,7 +1,10 @@
 import type { Request } from "express";
 import { GoogleGenAI } from "@google/genai";
 import { redactSensitiveLog } from "../src/utils/redaction";
-const keyFormat = /^AIza[0-9A-Za-z-_]{35}$/;
+import {
+  validateGeminiApiKeyFormat,
+  sanitizeGeminiApiKey,
+} from "../src/utils/geminiApiKey";
 export class GeminiRequestError extends Error {
   constructor(
     message: string,
@@ -12,8 +15,8 @@ export class GeminiRequestError extends Error {
   }
 }
 export function getRequestGeminiKey(req: Request): string {
-  const key = req.get("X-Gemini-Api-Key")?.trim();
-  if (!key || !keyFormat.test(key))
+  const key = sanitizeGeminiApiKey(req.get("X-Gemini-Api-Key"));
+  if (!key || !validateGeminiApiKeyFormat(key).isValid)
     throw new GeminiRequestError(
       "MISSING_USER_API_KEY",
       401,
@@ -22,7 +25,8 @@ export function getRequestGeminiKey(req: Request): string {
   return key;
 }
 export function createUserGeminiClient(key?: string): GoogleGenAI {
-  if (!key || !keyFormat.test(key))
+  key = sanitizeGeminiApiKey(key);
+  if (!key || !validateGeminiApiKeyFormat(key).isValid)
     throw new GeminiRequestError(
       "MISSING_USER_API_KEY",
       401,

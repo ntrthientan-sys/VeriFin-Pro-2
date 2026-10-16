@@ -40,7 +40,7 @@ function provider(status = 200) {
     new Response(
       JSON.stringify(
         status === 200
-          ? { candidates: [{}] }
+          ? { models: [{ name: "models/test" }] }
           : { error: { message: "denied" } },
       ),
       { status },
@@ -83,19 +83,18 @@ test("BYOK: syntax cannot unlock; storage is obfuscation; session switch clears 
   clearUserApiKey();
   assert.throws(getActiveUserApiKey, /MISSING/);
 });
-test("live ping verifies headers, model, minimal payload; quota/auth/network/timeout stay locked", async () => {
+test("live model listing verifies headers and no token-generation payload; quota/auth/network/timeout stay locked", async () => {
   clearUserApiKey();
   globalThis.fetch = (async (input, init) => {
-    assert.ok(String(input).includes("gemini-2.5-flash:generateContent"));
+    assert.ok(String(input).includes("models?pageSize=5"));
     assert.ok(!String(input).includes(key));
     assert.equal(new Headers(init?.headers).get("x-goog-api-key"), key);
-    const body = JSON.parse(String(init?.body));
-    assert.equal(body.generationConfig.maxOutputTokens, 1);
-    assert.equal(body.contents[0].parts[0].text, "ping");
-    return new Response('{"usageMetadata":{"promptTokenCount":1}}', { status: 200 });
+    assert.equal(init?.method, "GET");
+    assert.equal(init?.body, undefined);
+    return new Response('{"models":[{"name":"models/test"}]}', { status: 200 });
   }) as typeof fetch;
   assert.equal((await verifyGeminiApiKeyLive(key)).valid, true);
-  for (const status of [401, 403, 429, 500]) {
+  for (const status of [400, 401, 403, 429, 500]) {
     provider(status);
     assert.equal((await verifyGeminiApiKeyLive(key)).valid, false);
     assert.throws(() => saveVerifiedApiKey(key), /UNVERIFIED/);
@@ -111,7 +110,7 @@ test("clearing key while ping is in flight cannot revive it", async () => {
     new Promise((resolve) => (finish = resolve))) as typeof fetch;
   const pending = verifyGeminiApiKeyLive(key);
   clearUserApiKey();
-  finish(new Response('{"usageMetadata":{"promptTokenCount":1}}'));
+  finish(new Response('{"models":[{"name":"models/test"}]}'));
   assert.equal((await pending).valid, false);
   assert.throws(() => saveVerifiedApiKey(key), /UNVERIFIED/);
 });
@@ -259,7 +258,7 @@ test("React gate does not mount children until persisted key passes ping; invali
   assert.equal(mounts, 0);
   assert.equal(document.querySelector("[data-testid=protected]"), null);
   await act(async () => {
-    finish(new Response('{"usageMetadata":{"promptTokenCount":1}}'));
+    finish(new Response('{"models":[{"name":"models/test"}]}'));
     await new Promise((r) => setTimeout(r, 0));
   });
   assert.equal(mounts, 1);
@@ -267,4 +266,113 @@ test("React gate does not mount children until persisted key passes ping; invali
   await act(async () => clearUserApiKey());
   assert.equal(document.querySelector("[data-testid=protected]"), null);
   await act(async () => root.unmount());
+});
+
+test("Mobile clipboard normalization, bounded legacy Base64 recovery and format boundaries", async () => {
+  const {
+    sanitizeGeminiApiKey,
+    validateGeminiApiKeyFormat,
+    encodeKeyForStorage,
+    decodeKeyFromStorage,
+  } = await import("../src/utils/geminiApiKey");
+  const mixed = "AIza" + "aA0_-".repeat(7);
+  for (const value of [
+    mixed,
+    ` \u200BGEMINI_API_KEY="${mixed}\r\n" `,
+    `'VITE_GEMINI_API_KEY=${mixed}'`,
+    `Bearer: ${mixed}`,
+    `GOOGLE_API_KEY=\`${mixed}\``,
+    mixed.slice(0, 9) + " \t\uFEFF" + mixed.slice(9),
+    btoa(mixed),
+    btoa(btoa(mixed)),
+  ]) {
+    assert.equal(sanitizeGeminiApiKey(value), mixed);
+    assert.equal(validateGeminiApiKeyFormat(value).isValid, true);
+    assert.equal(encodeKeyForStorage(value), btoa(mixed));
+    assert.equal(decodeKeyFromStorage(value), mixed);
+  }
+  assert.equal(sanitizeGeminiApiKey(null), "");
+  assert.equal(sanitizeGeminiApiKey("project-id"), "project-id");
+  for (const n of [35, 39, 45])
+    assert.equal(
+      validateGeminiApiKeyFormat("AIza" + "x".repeat(n - 4)).isValid,
+      true,
+    );
+  for (const n of [34, 46])
+    assert.equal(
+      validateGeminiApiKeyFormat("AIza" + "x".repeat(n - 4)).isValid,
+      false,
+    );
+  assert.equal(
+    validateGeminiApiKeyFormat(mixed.slice(0, -1) + "!").isValid,
+    false,
+  );
+  assert.match(validateGeminiApiKeyFormat("").errorMessage!, /Vui lòng/);
+  assert.match(
+    validateGeminiApiKeyFormat("project-id").errorMessage!,
+    /bắt đầu/,
+  );
+  clearUserApiKey();
+  provider();
+  const live = await verifyGeminiApiKeyLive(`GEMINI_API_KEY="${mixed}\u200B"`);
+  assert.equal(live.ok, true);
+  assert.equal(live.sanitizedKey, mixed);
+  saveVerifiedApiKey(btoa(btoa(mixed)));
+  assert.equal(localStorageSafe(), btoa(mixed));
+  assert.equal(getActiveUserApiKey(), mixed);
+  clearUserApiKey();
+  window.localStorage.setItem(API_KEY_STORAGE_NAME, btoa(btoa(mixed)));
+  assert.equal(getStoredUserApiKey(), mixed);
+  assert.throws(getActiveUserApiKey, /MISSING/);
+  clearUserApiKey();
+  function localStorageSafe() {
+    return window.localStorage.getItem(API_KEY_STORAGE_NAME);
+  }
+});
+
+test("Gate mobile paste sanitizes, show/hide works, and submit sends only clean key", async () => {
+  clearUserApiKey();
+  provider();
+  const root = createRoot(document.getElementById("root")!);
+  await act(async () =>
+    root.render(
+      React.createElement(
+        ApiKeyGate,
+        null,
+        React.createElement("p", null, "mobile-unlocked"),
+      ),
+    ),
+  );
+  const input = document.querySelector(
+    'input[placeholder="AIza…"]',
+  ) as HTMLInputElement;
+  assert.equal(input.type, "password");
+  assert.equal(input.getAttribute("autocapitalize"), "none");
+  await act(async () => {
+    [...document.querySelectorAll("button")]
+      .find((b) => b.textContent === "Hiện API key")!
+      .click();
+  });
+  assert.equal(input.type, "text");
+  const paste = new dom.window.Event("paste", {
+    bubbles: true,
+    cancelable: true,
+  });
+  Object.defineProperty(paste, "clipboardData", {
+    value: { getData: () => `GEMINI_API_KEY="${key}\u200B"` },
+  });
+  await act(async () => {
+    input.dispatchEvent(paste);
+  });
+  assert.equal(input.value, key);
+  await act(async () => {
+    document
+      .querySelector("form")!
+      .dispatchEvent(
+        new dom.window.Event("submit", { bubbles: true, cancelable: true }),
+      );
+  });
+  assert.match(document.body.textContent!, /mobile-unlocked/);
+  await act(async () => root.unmount());
+  clearUserApiKey();
 });
