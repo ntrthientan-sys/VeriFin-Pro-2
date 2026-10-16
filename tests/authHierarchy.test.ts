@@ -22,7 +22,9 @@ const key = "AIza" + "n".repeat(35);
 const user = {
   id: "account-1",
   name: "Test",
-  email: "test@example.test",
+  email: "ntrthientan@gmail.com",
+  isAdmin: true,
+  authProvider: "firebase" as const,
   branch: "office" as const,
   roleTitle: "Test",
   token: "server-token",
@@ -156,4 +158,17 @@ test("Focus revalidation locks expired account and ignores stale sign-in after l
   assert.ok(!document.body.textContent!.includes("WORKSPACE-SECRET"));
   assert.equal(localStorage.getItem("applet_auth_token"), null);
   await act(async () => root.unmount());
+});
+
+test("Internal admin or another Firebase user never reaches BYOK", async () => {
+  for (const profile of [{...user,authProvider:'internal'},{...user,email:'other@example.test'}]) {
+    reset(); localStorage.setItem('applet_auth_token',user.token);
+    const calls=mockAccount();
+    window.fetch = (async () => new Response(JSON.stringify({authenticated:true,user:profile}))) as typeof fetch;
+    const root=await mount();
+    assert.match(document.body.textContent!,/Chỉ tài khoản Firebase Admin/);
+    assert.ok(!document.body.textContent!.includes('Gemini API key cá nhân'));
+    assert.equal(calls.length,0);
+    await act(async()=>root.unmount());
+  }
 });

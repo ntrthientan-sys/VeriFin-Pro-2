@@ -1,59 +1,18 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Default deny all unknown paths
-    match /{document=**} {
-      allow read, write: if false;
+    function isAuthorizedAdmin() {
+      return request.auth != null
+        && request.auth.token.email == 'ntrthientan@gmail.com'
+        && request.auth.token.email_verified == true;
     }
-
-    function isSignedIn() {
-      return request.auth != null;
-    }
-
-    function isOwner(userId) {
-      return isSignedIn() && (request.auth.uid == userId || request.auth.token.get('admin', false) == true);
-    }
-
-    function isValidId(id) {
-      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    // Connection test document
-    match /test/connection {
-      allow read: if true;
-    }
-
-    // Users collection and subcollections
-    match /users/{userId} {
-      allow get: if isOwner(userId);
-      allow list: if isOwner(userId);
-      // Roles and local identity links are written only by trusted Admin SDK.
-      allow create: if isOwner(userId) && isValidId(userId)
-        && !request.resource.data.keys().hasAny(['role', 'isAdmin', 'admin', 'localUserId']);
-      allow update: if isOwner(userId) && isValidId(userId)
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role', 'isAdmin', 'admin', 'localUserId', 'email', 'userId']);
-      allow delete: if false;
-
-      // Settings subcollection (e.g. bank account config)
-      match /settings/{settingId} {
-        allow read, write: if isOwner(userId) && isValidId(settingId);
-      }
-
-      // Debt records
-      match /debts/{debtId} {
-        allow read, write: if isOwner(userId) && isValidId(debtId);
-      }
-
-      // Chat sessions
-      match /chatSessions/{sessionId} {
-        allow read, write: if isOwner(userId) && isValidId(sessionId);
-
-        // Messages inside session
-        match /messages/{messageId} {
-          allow read, write: if isOwner(userId) && isValidId(messageId);
-        }
-      }
-    }
+    match /users/{uid}/{document=**} { allow read, write: if isAuthorizedAdmin(); }
+    match /workspaces/{workspaceId}/{document=**} { allow read, write: if isAuthorizedAdmin(); }
+    match /inventory/{document=**} { allow read, write: if isAuthorizedAdmin(); }
+    match /orders/{document=**} { allow read, write: if isAuthorizedAdmin(); }
+    match /invoices/{document=**} { allow read, write: if isAuthorizedAdmin(); }
+    match /creditApplications/{document=**} { allow read, write: if isAuthorizedAdmin(); }
+    match /evidence/{document=**} { allow read, write: if isAuthorizedAdmin(); }
+    match /{document=**} { allow read, write: if false; }
   }
 }

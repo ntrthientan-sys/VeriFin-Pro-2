@@ -102,7 +102,7 @@ Dự án được xây dựng và phát triển bởi **Nguyễn Trường Thiê
 - `ADMIN_PASSWORD`: mật khẩu ít nhất 12 ký tự, dùng tạo tài khoản quản trị đầu tiên trong `ADMIN_EMAILS` khi chưa tồn tại. Không có tài khoản/mật khẩu demo được tạo sẵn. Đổi biến này không thay mật khẩu tài khoản đã tồn tại.
 - `DATA_DIR`: thư mục dữ liệu bền vững (mặc định `./data`). Tài khoản được lưu với mật khẩu băm scrypt có salt; cấu hình ngân hàng cũng được giữ sau khi khởi động lại. Sao lưu và bảo vệ thư mục này; phiên đăng nhập cục bộ vẫn hết hiệu lực khi máy chủ khởi động lại.
 - Gemini sử dụng BYOK bắt buộc: người dùng nhập key cá nhân tại màn hình khóa và phải vượt qua live ping mỗi lần mở app. Không đặt key Gemini trong biến môi trường hoặc mã nguồn. Lỗi AI không được thay bằng dữ liệu mẫu.
-- `FIREBASE_PROJECT_ID`: phải khớp project trong `firebase-applet-config.json` nếu dùng đăng nhập Google. Backend xác minh ID token bằng Firebase Admin SDK, không tin thông tin người dùng do frontend tự khai. Cần cấu hình Google provider và authorized domains tại Firebase. Chưa kiểm thử OAuth thật trong môi trường kiểm tra.
+- `FIREBASE_PROJECT_ID`: phải khớp `VITE_FIREBASE_PROJECT_ID` nếu dùng đăng nhập Google. Backend xác minh ID token bằng Firebase Admin SDK, không tin thông tin người dùng do frontend tự khai. Cần cấu hình Google provider và authorized domains tại Firebase. Chưa kiểm thử OAuth thật trong môi trường kiểm tra.
 - Tài khoản thụ hưởng ban đầu để trống. Đăng nhập quản trị và cấu hình trước khi xuất PDF công nợ. Không tự chọn tài khoản mẫu.
 - File xuất và phiên đối soát gắn với cookie HttpOnly của trình duyệt, hết hạn sau 30 phút; tổng buffer giới hạn 256 MiB. Khởi động lại làm mất file tạm. Cookie không thay thế cơ chế phân quyền tổ chức.
 - Đối soát công nợ chỉ tự khớp mã KH đầy đủ, không khớp theo tên; giao dịch chứa nhiều mã không được tự phân bổ. Một khoản thu được phân bổ lần lượt qua các dòng cùng mã, không cộng lặp. Cần đối chiếu thủ công các khoản không khớp và xác định sao kê đã bao gồm khoản “đã thu” hay chưa.
@@ -130,11 +130,11 @@ Kiểm tra: `npm run lint`, `npm run build`, `npm test` (7 test gồm kiểm th�
 
 ### Giao diện vận hành — Phase 3–4
 
-Vào **Văn phòng → Kho • Đơn hàng • Hóa đơn REA** để quản lý SKU, nhập hàng, đơn, thu/hoàn tiền, metadata hóa đơn, ABC và kế hoạch vốn. Gemini dùng BYOK đã xác thực; tư vấn quy tắc có nút riêng. VietQR dùng thụ hưởng server, không dùng tài khoản mẫu. Dữ liệu lưu trên thiết bị bằng IndexedDB, chưa đồng bộ nhiều máy. Xem [hướng dẫn và giới hạn Phase 3–4](docs/operations-phase-3-4.md).
+Vào **Văn phòng → Kho • Đơn hàng • Hóa đơn REA** để quản lý SKU, nhập hàng, đơn, thu/hoàn tiền, metadata hóa đơn, ABC và kế hoạch vốn. Gemini dùng BYOK đã xác thực; tư vấn quy tắc có nút riêng. VietQR dùng thụ hưởng server, không dùng tài khoản mẫu. Dữ liệu thật dùng Firestore transaction; dữ liệu mẫu giữ riêng bằng IndexedDB. Xem [hướng dẫn và giới hạn Phase 3–4](docs/operations-phase-3-4.md).
 
 ### BYOK trên điện thoại
 
-Gate làm sạch ký tự ẩn/khoảng trắng, tiền tố `.env`/Bearer, dấu nháy trước khi kiểm tra; phục hồi Base64 một hoặc hai lớp, chỉ lưu lại một lớp sau xác thực. Có nút Hiện/Ẩn và tắt tự viết hoa/sửa chính tả. Regex 35–45 ký tự là kiểm tra sơ bộ, không chứng minh key thật.
+Gate làm sạch ký tự ẩn/khoảng trắng, tiền tố `.env`/Bearer, dấu nháy trước khi kiểm tra; phục hồi Base64 một hoặc hai lớp, chỉ lưu lại một lớp sau xác thực. Có nút Hiện/Ẩn và tắt tự viết hoa/sửa chính tả. Regex đúng 39 ký tự là kiểm tra sơ bộ, không chứng minh key thật.
 
 Theo yêu cầu cập nhật, Gate gọi `GET /v1beta/models?pageSize=5` trực tiếp tới Google, truyền key bằng `x-goog-api-key` (không qua query URL). Đây là kiểm tra quyền liệt kê model, không xác nhận quota/quyền sinh nội dung của từng model; các call AI tiếp tục fail-closed khi provider từ chối. Lỗi 400/401/403/429/mạng/timeout không mở Gate. Key lưu sẵn vẫn phải được kiểm tra trực tiếp mỗi lần mở app.
 
@@ -147,3 +147,7 @@ Chỉ sau xác thực tài khoản mới mount BYOK và gọi Google kiểm tra 
 ### Firebase Auth và admin server
 
 Seed danh tính admin, đồng bộ Auth/Firestore và thông báo lỗi Google đã được bổ sung. Mật khẩu bootstrap chỉ lấy từ secret server; fallback vẫn xác thực hash trên server, không mở admin từ trình duyệt. Xem [cấu hình, quyền và giới hạn đồng bộ](docs/firebase-auth-setup.md). Firebase thật cần web config, Admin credentials và triển khai Firestore rules; code không tự tạo các quyền truy cập này.
+
+### Chính sách Firebase admin và build fail-fast
+
+Bản nâng cấp mới bắt buộc Firebase admin đã xác minh trước BYOK; mọi API nghiệp vụ cũng kiểm tra quyền này. Build bị chặn nếu thiếu sáu biến Firebase. Xem [6 hạng mục, cấu hình và giới hạn xác minh](docs/security-upgrade.md). Chính sách mới thay thế mô tả đăng nhập nội bộ mở Workspace ở các phiên bản trước.

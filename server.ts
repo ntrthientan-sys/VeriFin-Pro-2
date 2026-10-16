@@ -82,6 +82,16 @@ app.use('/api', (req, res, next) => {
   requestOwner.run(owner, next);
 });
 
+// Every business API requires a server-verified Firebase administrator, never browser flags.
+app.use('/api', async (req, res, next) => {
+  if (req.path.startsWith('/auth/')) return next();
+  const user = await getAuthenticatedUser(req);
+  if (!user) return res.status(401).json({error:'Vui lòng đăng nhập Firebase Admin.'});
+  if (user.authProvider !== 'firebase' || user.role !== 'admin' || normalizeEmail(user.email) !== ADMIN_CONFIG.email)
+    return res.status(403).json({error:'Chỉ Firebase Admin được sử dụng API nghiệp vụ.'});
+  next();
+});
+
 // Gemini credentials belong exclusively to this request; never stored on the server.
 const byokRoutes = new Set(['/api/operations/advisory','/api/ai/extract-batch', '/api/bank/cic-bctc-extract', '/api/bank/collateral-ltv', '/api/chat/message', '/api/evidence/extract', '/api/bank/credit-proposal']);
 app.use((req, res, next) => {
@@ -291,7 +301,7 @@ let activeBankAccount = loadState<BankAccountConfig>('bank-account.json', {
 const activeSessions = new Map<string, { userId: string; expiresAt: number }>();
 
 async function getAuthenticatedUser(req: express.Request): Promise<UserAccountRecord | null> {
-  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim() || /(?:^|;\s*)verifin_firebase=([A-Za-z0-9_.-]+)(?:;|$)/.exec(req.headers.cookie || '')?.[1];
   if (!token) return null;
   const session = activeSessions.get(token);
   if (session) {
@@ -307,8 +317,8 @@ async function getAuthenticatedUser(req: express.Request): Promise<UserAccountRe
     const email=normalizeEmail(decoded.email);
     const linked=registeredUsers.find(u=>u.firebaseUid===decoded.uid && normalizeEmail(u.email)===email);
     if(!decoded.email_verified && !linked)return null;
-    const isAdmin=adminEmails.includes(email)&&(decoded.email_verified||linked?.role==='admin');
-    const profile={id:linked?.id||decoded.uid,name:linked?.name||(isAdmin?ADMIN_CONFIG.fullName:decoded.name||email),email,phone:linked?.phone||'',password:'',branch:linked?.branch||'all' as const,roleTitle:isAdmin?ADMIN_CONFIG.department:linked?.roleTitle||'Google',role:isAdmin?'admin' as const:'user' as const,createdAt:linked?.createdAt||''};
+    const isAdmin=email===ADMIN_CONFIG.email && decoded.email_verified===true;
+    const profile={id:linked?.id||decoded.uid,name:linked?.name||(isAdmin?ADMIN_CONFIG.fullName:decoded.name||email),email,phone:linked?.phone||'',password:'',branch:linked?.branch||'all' as const,roleTitle:isAdmin?ADMIN_CONFIG.department:linked?.roleTitle||'Google',role:isAdmin?'admin' as const:'user' as const,authProvider:'firebase' as const,createdAt:linked?.createdAt||''};
     // Role assignment is server-owned; profile write failure does not turn valid identity into an outage.
     try{const cloud=await services.auth.getUser(decoded.uid);await services.auth.setCustomUserClaims(decoded.uid,{...cloud.customClaims,admin:isAdmin,role:profile.role});}catch{}
     void services.db.collection('users').doc(decoded.uid).set({email,role:profile.role,isAdmin,fullName:profile.name,department:profile.roleTitle,updatedAt:(await import('firebase-admin/firestore')).FieldValue.serverTimestamp()},{merge:true}).catch(()=>{});
@@ -389,6 +399,7 @@ export interface UserAccountRecord {
   phone?: string;
   password: string;
   role?: 'admin' | 'user';
+  authProvider?: 'firebase' | 'internal';
   firebaseUid?: string;
   firebaseSyncStatus?: 'SYNCED' | 'PENDING' | 'CONFLICT';
   branch: 'office' | 'banking' | 'all';
@@ -586,12 +597,17 @@ app.get('/api/auth/me', async (req, res) => {
     });
   }
 
+  if (user.authProvider === 'firebase') {
+    const token = req.headers.authorization?.replace(/^Bearer\s+/i, '').trim();
+    if(token) res.cookie('verifin_firebase',token,{httpOnly:true,sameSite:'strict',secure:process.env.NODE_ENV==='production',maxAge:3600000,path:'/api'});
+  }
   return res.json({
     authenticated: true,
     user: {
       id: user.id,
       role: user.role||'user',
       isAdmin: user.role==='admin',
+      authProvider: user.authProvider || 'internal',
       firebaseSyncStatus:user.firebaseSyncStatus,
       name: user.name,
       email: user.email,
@@ -605,6 +621,7 @@ app.get('/api/auth/me', async (req, res) => {
 
 // 4. API Đăng Xuất
 app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('verifin_firebase',{path:'/api'});
   const authHeader = req.headers.authorization;
   if (authHeader) {
     const token = authHeader.replace(/^Bearer\s+/i, '').trim();

@@ -1,3 +1,4 @@
+import { FirebaseConnectionStatus } from './components/auth/FirebaseConnectionStatus';
 import {normalizeEmail,firebaseAuthMessage} from './utils/authIdentity';
 import { redactSensitiveLog } from './utils/redaction';
 import { apiFetch as fetch } from './services/apiClient';
@@ -182,6 +183,9 @@ export function AuthModal({
       // Save user session and token
 
       setSuccessMessage('Đang xác thực phiên tài khoản với máy chủ…');
+      if (data.firebaseCustomToken && firebase.auth?.currentUser?.email?.trim().toLowerCase() === verifiedUser.email.trim().toLowerCase()) {
+        verifiedUser.token = await firebase.auth.currentUser.getIdToken();
+      }
       await onAuthSuccess(verifiedUser);
       onClose();
     } catch (err: any) {
@@ -271,6 +275,9 @@ export function AuthModal({
       } catch {}
 
       setSuccessMessage('Đã tạo tài khoản. Đang xác thực phiên với máy chủ…');
+      if (data.firebaseCustomToken && firebase.auth?.currentUser?.email?.trim().toLowerCase() === verifiedUser.email.trim().toLowerCase()) {
+        verifiedUser.token = await firebase.auth.currentUser.getIdToken();
+      }
       await onAuthSuccess(verifiedUser);
       onClose();
     } catch (err: any) {
@@ -367,6 +374,7 @@ export function AuthModal({
             </div>
           )}
 
+          <FirebaseConnectionStatus />
           {/* Only offer Google when the Firebase SDK initialized successfully. */}
           {googleReady ? <div className="space-y-3 pb-2">
             <button

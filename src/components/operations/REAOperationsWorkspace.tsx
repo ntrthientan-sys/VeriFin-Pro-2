@@ -1,3 +1,5 @@
+import { loadCloudOperationsWorkspace, mutateCloudOperationsWorkspace } from '../../services/firestoreOperationsStore';
+import { roundVND } from '../../utils/FinanceMath';
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   InventoryItemSchema,
@@ -40,7 +42,7 @@ import { computeFileSha256 } from "../../utils/deterministicCache";
 import { redactSensitiveLog } from "../../utils/redaction";
 import { apiFetch } from "../../services/apiClient";
 const money = (v: number) =>
-  `${v.toLocaleString("vi-VN", { maximumFractionDigits: 2 })} ₫`;
+  `${roundVND(v).toLocaleString("vi-VN", { maximumFractionDigits: 2 })} ₫`;
 const button =
   "rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-sm hover:bg-slate-700 disabled:opacity-40";
 const panel = "rounded-xl border border-slate-700 bg-slate-900 p-4";
@@ -165,7 +167,8 @@ export default function REAOperationsWorkspace({ userId }: { userId: string }) {
     )
       .then((hash) => {
         const key = `${hash}:${demo ? "sample" : "live"}`;
-        return loadOperationsWorkspace(key).then((r) => {
+        if (current) setScope(key);
+        return (demo ? loadOperationsWorkspace(key) : loadCloudOperationsWorkspace()).then((r) => {
           if (current) {
             setScope(key);
             setRecord(r);
@@ -271,10 +274,10 @@ export default function REAOperationsWorkspace({ userId }: { userId: string }) {
     setBusy(true);
     setError("");
     try {
-      const next = OperationsStateSchema.parse(
-        change(structuredClone(record.state)),
-      );
-      const saved = await saveOperationsWorkspace(scope, record.revision, next);
+      const operationId = crypto.randomUUID();
+      const saved = demo
+        ? await saveOperationsWorkspace(scope, record.revision, OperationsStateSchema.parse(change(structuredClone(record.state))))
+        : await mutateCloudOperationsWorkspace(record.revision, change, operationId);
       if (alive.current) {
         setRecord(saved);
         setReference(demo ? stamp() : new Date().toISOString());
@@ -292,7 +295,7 @@ export default function REAOperationsWorkspace({ userId }: { userId: string }) {
     commit((s) => applyOperationsCommand(s, cmd).state);
   async function reload() {
     try {
-      setRecord(await loadOperationsWorkspace(scope));
+      setRecord(await (demo ? loadOperationsWorkspace(scope) : loadCloudOperationsWorkspace()));
       setError("");
     } catch (e) {
       setError(redactSensitiveLog(e));
@@ -474,7 +477,7 @@ export default function REAOperationsWorkspace({ userId }: { userId: string }) {
           Điều hành Kho • Đơn hàng • Hóa đơn
         </h1>
         <p className="text-sm text-slate-400 my-2">
-          Evidence v2 · Dữ liệu lưu trên trình duyệt này, chưa đồng bộ máy khác.
+          Evidence v2 · Kho thật đồng bộ Firestore; dữ liệu mẫu lưu riêng trên thiết bị.
           Nhật ký chưa có chữ ký kiểm toán.
         </p>
         <div className="flex flex-wrap gap-2">

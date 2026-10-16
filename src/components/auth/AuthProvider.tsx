@@ -1,3 +1,4 @@
+import { isFirebaseAdminProfile } from "../../utils/firebaseEnv";
 import React, {
   createContext,
   useContext,
@@ -20,6 +21,7 @@ const userSchema = z.object({
   roleTitle: z.string(),
   role: z.enum(["admin", "user"]).optional(),
   isAdmin: z.boolean().optional(),
+  authProvider: z.enum(["firebase", "internal"]).optional(),
   firebaseSyncStatus: z.enum(["SYNCED", "PENDING", "CONFLICT"]).optional(),
 });
 interface AuthContextValue {
@@ -42,6 +44,22 @@ export async function verifyAccountSession(
   token: string,
 ): Promise<UserSession> {
   if (!token) throw new Error("Vui lòng đăng nhập tài khoản.");
+  // Refresh the persisted Firebase session before server validation; never switch accounts silently.
+  if (token.split(".").length === 3) {
+    const firebase = await import("../../firebase");
+    if (firebase.auth) {
+      await firebase.auth.authStateReady();
+      const current = firebase.auth.currentUser;
+      let subject: unknown;
+      try {
+        subject = JSON.parse(
+          atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/")),
+        ).sub;
+      } catch {}
+      if (current && subject === current.uid)
+        token = await current.getIdToken();
+    }
+  }
   const response = await window.fetch("/api/auth/me", {
     headers: { Authorization: `Bearer ${token}` },
     cache: "no-store",
@@ -168,8 +186,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       try {
         const current = session.current;
         const verified = await verifyAccountSession(current.token!);
-        if (verified.id !== current.id)
-          throw new Error("Danh tính phiên tài khoản đã thay đổi.");
+        if (verified.id !== current.id || !isFirebaseAdminProfile(verified))
+          throw new Error("Danh tính hoặc quyền Firebase Admin đã thay đổi.");
+        if (revision === epoch.current) {
+          session.current = verified;
+          window.localStorage.setItem(TOKEN, verified.token!);
+          setUser(verified);
+        }
       } catch (e) {
         if (revision === epoch.current) {
           clear();
