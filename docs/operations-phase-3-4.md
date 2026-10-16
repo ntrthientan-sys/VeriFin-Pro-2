@@ -1,3 +1,5 @@
+> Cập nhật: kho thật chuyển sang Firestore transaction; IndexedDB chỉ còn dùng cho dữ liệu mẫu. Xem [giới hạn và cấu trúc lưu mới](security-upgrade.md).
+
 # Phase 3–4: giao diện vận hành và tư vấn
 
 Mở **Văn phòng → Kho • Đơn hàng • Hóa đơn REA**. Module tải bằng React.lazy, nằm sau ApiKeyGate chung. Không có ô lưu raw key thứ hai hay key mặc định.

@@ -1,3 +1,5 @@
+> Cập nhật: chính sách hiện hành là Firebase admin-only. Xem [bản nâng cấp 6 hạng mục](security-upgrade.md); đăng nhập nội bộ bên dưới chỉ dùng để khởi tạo/đồng bộ, không mở Workspace.
+
 # Firebase và tài khoản quản trị
 
 PR #4 (Phase 3–4, Auth-first và BYOK mobile) đã merge vào main. Bản sửa tiếp theo bổ sung seed server, đồng bộ Firebase và quyền hồ sơ.
@@ -28,7 +30,7 @@ Seed chỉ tạo khi tài khoản chưa có; không âm thầm reset mật khẩ
 
 1. Firebase Console: bật **Email/Password** và **Google** trong Authentication → Sign-in method; thêm tên miền triển khai trong Authorized domains.
 2. Client build: `VITE_FIREBASE_API_KEY` của chính Firebase project (không phải Gemini key). Có thể override project/domain/database bằng `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_DATABASE_ID`.
-3. Server: `FIREBASE_PROJECT_ID` phải khớp client; `FIREBASE_DATABASE_ID` phải khớp named database. Mặc định database lấy từ `firebase-applet-config.json`.
+3. Server: `FIREBASE_PROJECT_ID` phải khớp client; `FIREBASE_DATABASE_ID` phải khớp named database. Bỏ trống dùng `(default)`; project có named database phải đặt cả hai biến database ID.
 4. Cấp Firebase Admin SDK Application Default Credentials hoặc `GOOGLE_APPLICATION_CREDENTIALS` trỏ tới service-account file chỉ có trên server. Cần quyền Firebase Authentication và Firestore phù hợp. Không commit file credential.
 5. `FIREBASE_WEB_API_KEY` hoặc `VITE_FIREBASE_API_KEY` trên server để xác minh password khi liên kết một cloud user đã có. Không reset password cloud hoặc gán quyền chỉ dựa trên email trùng.
 6. Triển khai `firestore.rules` bằng tài khoản có quyền. Rules mới chặn owner tự ghi role/isAdmin/admin/localUserId và sửa email/userId. Chính sách hiện tại từ chối xóa hồ sơ từ client.

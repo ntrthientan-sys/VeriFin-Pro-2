@@ -1,4 +1,3 @@
-import firebaseConfig from "../firebase-applet-config.json";
 import { getApps, initializeApp, applicationDefault } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
@@ -32,7 +31,6 @@ export function firebaseAdminServices() {
     db: getFirestore(
       app,
       process.env.FIREBASE_DATABASE_ID ||
-        firebaseConfig.firestoreDatabaseId ||
         "(default)",
     ),
   };

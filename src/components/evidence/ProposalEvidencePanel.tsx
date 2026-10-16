@@ -180,6 +180,13 @@ export default function ProposalEvidencePanel({
       >
         {gate.reasonSummary}
       </p>
+      {!gate.canExportProposal && <section role="alert" aria-label="Các mục chặn xuất tờ trình" className="rounded border border-rose-600 p-3">
+        <strong>Cần xử lý trước khi xuất tờ trình:</strong>
+        <ul className="list-disc pl-5">
+          {gate.missingCoreDerivations.map(key => <li key={key}>Bổ sung chứng từ/đầu vào để tính: {key}. Không thể bỏ qua bằng giải trình.</li>)}
+          {gate.unresolvedBlockers.map(issue => <li key={issue.id}>{issue.message} — bổ sung bằng chứng hoặc ghi chú xác minh tại mục tương ứng bên dưới.</li>)}
+        </ul>
+      </section>}
       {!!gate.missingCoreDerivations.length && (
         <p className="text-xs text-slate-400">
           Còn thiếu: {gate.missingCoreDerivations.join(", ")}

@@ -116,6 +116,7 @@ export type TabKey =
 export interface UserSession {
   role?: 'admin' | 'user';
   isAdmin?: boolean;
+  authProvider?: 'firebase' | 'internal';
   firebaseSyncStatus?: 'SYNCED'|'PENDING'|'CONFLICT';
   id?: string;
   name: string;

@@ -293,12 +293,12 @@ test("Mobile clipboard normalization, bounded legacy Base64 recovery and format 
   }
   assert.equal(sanitizeGeminiApiKey(null), "");
   assert.equal(sanitizeGeminiApiKey("project-id"), "project-id");
-  for (const n of [35, 39, 45])
+  for (const n of [39])
     assert.equal(
       validateGeminiApiKeyFormat("AIza" + "x".repeat(n - 4)).isValid,
       true,
     );
-  for (const n of [34, 46])
+  for (const n of [34, 35, 38, 40, 45, 46])
     assert.equal(
       validateGeminiApiKeyFormat("AIza" + "x".repeat(n - 4)).isValid,
       false,

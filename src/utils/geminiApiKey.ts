@@ -1,5 +1,5 @@
 /** Format is only a preflight check. Google remains the authority on validity. */
-export const GEMINI_KEY_REGEX = /^AIza[0-9A-Za-z_-]{31,41}$/;
+export const GEMINI_KEY_REGEX = /^AIza[0-9A-Za-z_-]{35}$/;
 function clean(value: string): string {
   let result = value.trim().replace(/[\u200B-\u200D\uFEFF\r\n\t]/g, "");
   for (let i = 0; i < 2; i++)

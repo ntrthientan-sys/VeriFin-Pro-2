@@ -153,7 +153,7 @@ test("Workspace mounts empty, sample is explicit and separate; all four tabs ren
     await pause();
   });
   await act(pause);
-  assert.match(document.body.textContent!, /Chưa có đơn/);
+  assert.match(document.body.textContent!, /Firebase chưa cấu hình/);
   const click = async (text: string) => {
     const b = [...document.querySelectorAll("button")].find(
       (b) => b.textContent === text,
@@ -176,8 +176,14 @@ test("Workspace mounts empty, sample is explicit and separate; all four tabs ren
   await click("Xem tư vấn quy tắc");
   assert.match(document.body.textContent!, /không phải kết quả AI/);
   await click("Về dữ liệu thực");
-  await click("Đơn hàng & hóa đơn");
-  assert.match(document.body.textContent!, /Chưa có đơn/);
+  assert.match(document.body.textContent!, /Firebase chưa cấu hình/);
+  assert.equal([...document.querySelectorAll('button')].find(b=>b.textContent==='+ Thêm SKU')?.disabled,true);
+  await click("Mở không gian dữ liệu mẫu");
+  await act(async()=>{
+    root.render(React.createElement(Workspace,{userId:'empty-sample-tests'}));
+    await pause();
+  });
+  await act(pause);
   await click("+ Thêm SKU");
   const submit = async (values: Record<string, string>) => {
     const form = document.querySelector("dialog form")!;
@@ -185,7 +191,8 @@ test("Workspace mounts empty, sample is explicit and separate; all four tabs ren
       (form.querySelector(`[name="${name}"]`) as HTMLInputElement).value =
         value;
     await act(async () => {
-      form.dispatchEvent(
+      // Same event turn simulates a mobile double-tap before React renders disabled.
+      for (let tap=0;tap<2;tap++) form.dispatchEvent(
         new dom.window.Event("submit", { bubbles: true, cancelable: true }),
       );
       await pause();
