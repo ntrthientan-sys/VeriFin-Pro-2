@@ -1,3 +1,4 @@
+import {normalizeEmail,firebaseAuthMessage} from './utils/authIdentity';
 import { redactSensitiveLog } from './utils/redaction';
 import { apiFetch as fetch } from './services/apiClient';
 import React, { useState } from 'react';
@@ -44,6 +45,7 @@ export function AuthModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [firebaseNotice,setFirebaseNotice] = useState('');
 
   // Login Form States
   const [loginIdentifier, setLoginIdentifier] = useState(currentUser.email || '');
@@ -109,7 +111,8 @@ export function AuthModal({
       onClose();
     } catch (err: any) {
       console.error('Google Sign-In error:', redactSensitiveLog(err));
-      setErrorMessage(err.message || 'Lỗi khi đăng nhập bằng Google.');
+      setErrorMessage(firebaseAuthMessage(err));
+      setMode('login');
     } finally {
       setLoading(false);
     }
@@ -122,11 +125,25 @@ export function AuthModal({
     setSuccessMessage(null);
 
     try {
+      const identifier=loginIdentifier.trim();
+      if(identifier.includes('@')) {
+        const firebase=await import('./firebase');
+        try {
+          const cloudUser=await firebase.signInFirebaseEmail(normalizeEmail(identifier),loginPassword);
+          await onAuthSuccess({id:cloudUser.uid,name:cloudUser.displayName||'',email:normalizeEmail(cloudUser.email||identifier),branch:'all',roleTitle:'',token:await cloudUser.getIdToken()});
+          onClose();return;
+        } catch(error:any) {
+          // Invalid cloud credentials never auto-create or grant admin in the browser.
+          const allowed=['auth/not-configured','auth/invalid-api-key','auth/operation-not-allowed','auth/unauthorized-domain','auth/network-request-failed','auth/user-not-found','auth/invalid-credential','auth/wrong-password'];
+          if(error.code&&!allowed.includes(error.code))throw error;
+          setFirebaseNotice('Đang kiểm tra tài khoản nội bộ qua máy chủ; chưa xác thực Firebase.');
+        }
+      }
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          emailOrPhone: loginIdentifier.trim(),
+          emailOrPhone: normalizeEmail(loginIdentifier),
           password: loginPassword,
         }),
       });
@@ -136,7 +153,12 @@ export function AuthModal({
         throw new Error(data.error || 'Đăng nhập không thành công.');
       }
 
+      const firebase=await import('./firebase');
+      try{await firebase.acceptFirebaseCustomSession(data.firebaseCustomToken);}catch{setFirebaseNotice('Đã xác thực nội bộ; phiên Firebase chưa sẵn sàng.');}
+      if(data.firebaseSync!=='SYNCED')setFirebaseNotice('Đã xác thực nội bộ. Đồng bộ Firebase đang chờ cấu hình/kết nối hoặc cần xử lý xung đột tài khoản.');
       const verifiedUser: UserSession = {
+        role:data.user.role,
+        isAdmin:data.user.isAdmin,
         id: data.user.id,
         name: data.user.name,
         email: data.user.email,
@@ -153,7 +175,7 @@ export function AuthModal({
       await onAuthSuccess(verifiedUser);
       onClose();
     } catch (err: any) {
-      setErrorMessage(err.message || 'Lỗi kết nối máy chủ xác thực.');
+      setErrorMessage(err.code?firebaseAuthMessage(err):err.message || 'Lỗi kết nối máy chủ xác thực.');
     } finally {
       setLoading(false);
     }
@@ -193,7 +215,7 @@ export function AuthModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: regName.trim(),
-          email: regEmail.trim(),
+          email: normalizeEmail(regEmail),
           phone: regPhone.trim(),
           password: regPassword,
           branch: regBranch,
@@ -206,7 +228,12 @@ export function AuthModal({
         throw new Error(data.error || 'Đăng ký tài khoản không thành công.');
       }
 
+      const firebase=await import('./firebase');
+      try{await firebase.acceptFirebaseCustomSession(data.firebaseCustomToken);}catch{setFirebaseNotice('Đã xác thực nội bộ; phiên Firebase chưa sẵn sàng.');}
+      if(data.firebaseSync!=='SYNCED')setFirebaseNotice('Đã xác thực nội bộ. Đồng bộ Firebase đang chờ cấu hình/kết nối hoặc cần xử lý xung đột tài khoản.');
       const verifiedUser: UserSession = {
+        role:data.user.role,
+        isAdmin:data.user.isAdmin,
         id: data.user.id,
         name: data.user.name,
         email: data.user.email,
@@ -408,6 +435,7 @@ export function AuthModal({
                 </div>
               )}
 
+              {firebaseNotice&&<p role="status" className="text-xs text-amber-300">{firebaseNotice}</p>}
               {/* Email / SĐT Input */}
               <div>
                 <label className="block text-slate-300 font-semibold mb-1.5">
@@ -417,7 +445,7 @@ export function AuthModal({
                   <input
                     type="text"
                     value={loginIdentifier}
-                    onChange={(e) => setLoginIdentifier(e.target.value)}
+                    onChange={(e) => {setLoginIdentifier(e.target.value);setErrorMessage(null);setSuccessMessage(null);}}
                     placeholder="Ví dụ: ntrthientan@gmail.com hoặc 0817221722..."
                     className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white pl-9 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
                     required
@@ -438,7 +466,7 @@ export function AuthModal({
                   <input
                     type={showPassword ? 'text' : 'password'}
                     value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
+                    onChange={(e) => {setLoginPassword(e.target.value);setErrorMessage(null);setSuccessMessage(null);}}
                     placeholder="Nhập mật khẩu của bạn..."
                     className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white pl-9 pr-10 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
                     required
@@ -502,7 +530,7 @@ export function AuthModal({
                     <input
                       type="text"
                       value={regName}
-                      onChange={(e) => setRegName(e.target.value)}
+                      onChange={(e) => {setRegName(e.target.value);setErrorMessage(null);setSuccessMessage(null);}}
                       placeholder="Ví dụ: Nguyễn Văn An"
                       className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3 py-2 text-white pl-8 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
                       required
@@ -520,7 +548,7 @@ export function AuthModal({
                     <input
                       type="tel"
                       value={regPhone}
-                      onChange={(e) => setRegPhone(e.target.value)}
+                      onChange={(e) => {setRegPhone(e.target.value);setErrorMessage(null);setSuccessMessage(null);}}
                       placeholder="Ví dụ: 0912345678"
                       className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3 py-2 text-white pl-8 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
                       required
@@ -529,6 +557,7 @@ export function AuthModal({
                   </div>
                 </div>
 
+                <button type="button" className="text-sm text-cyan-300 min-h-11" aria-pressed={showPassword} onClick={()=>setShowPassword(!showPassword)}>{showPassword?'Ẩn mật khẩu':'Hiện mật khẩu'}</button>
                 {/* Email */}
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
@@ -538,7 +567,7 @@ export function AuthModal({
                     <input
                       type="email"
                       value={regEmail}
-                      onChange={(e) => setRegEmail(e.target.value)}
+                      onChange={(e) => {setRegEmail(e.target.value);setErrorMessage(null);setSuccessMessage(null);}}
                       placeholder="an.nguyen@company.com"
                       className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3 py-2 text-white pl-8 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
                       required
@@ -556,7 +585,7 @@ export function AuthModal({
                     <input
                       type="text"
                       value={regRoleTitle}
-                      onChange={(e) => setRegRoleTitle(e.target.value)}
+                      onChange={(e) => {setRegRoleTitle(e.target.value);setErrorMessage(null);setSuccessMessage(null);}}
                       placeholder="Ví dụ: Kế toán trưởng, Quản trị..."
                       className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3 py-2 text-white pl-8 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-medium"
                       required
@@ -572,9 +601,9 @@ export function AuthModal({
                   </label>
                   <div className="relative">
                     <input
-                      type="password"
+                      type={showPassword ? 'text' : 'password'}
                       value={regPassword}
-                      onChange={(e) => setRegPassword(e.target.value)}
+                      onChange={(e) => {setRegPassword(e.target.value);setErrorMessage(null);setSuccessMessage(null);}}
                       placeholder="••••••••"
                       className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3 py-2 text-white pl-8 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
                       required
@@ -590,9 +619,9 @@ export function AuthModal({
                   </label>
                   <div className="relative">
                     <input
-                      type="password"
+                      type={showPassword ? 'text' : 'password'}
                       value={regConfirmPassword}
-                      onChange={(e) => setRegConfirmPassword(e.target.value)}
+                      onChange={(e) => {setRegConfirmPassword(e.target.value);setErrorMessage(null);setSuccessMessage(null);}}
                       placeholder="••••••••"
                       className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3 py-2 text-white pl-8 placeholder-slate-500 focus:outline-none focus:border-emerald-500 font-mono"
                       required

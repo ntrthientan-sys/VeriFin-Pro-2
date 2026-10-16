@@ -143,3 +143,7 @@ Theo yêu cầu cập nhật, Gate gọi `GET /v1beta/models?pageSize=5` trực 
 `AuthProvider → AuthGate → ApiKeyGate → Workspace`. Người dùng phải đăng nhập/đăng ký trước. `/api/auth/me` kiểm chứng token với server cả khi mở lại app; hồ sơ hoặc cờ đăng nhập lưu cục bộ không mở khóa ứng dụng. Với tài khoản Google, backend còn kiểm tra Firebase token và email đã xác minh theo cấu hình hiện có. Không có chức năng xác minh email OTP mới cho tài khoản đăng ký nội bộ.
 
 Chỉ sau xác thực tài khoản mới mount BYOK và gọi Google kiểm tra key. Đăng xuất khóa workspace ngay cả khi mạng lỗi; đổi tài khoản xóa key cũ. Phiên được kiểm tra lại khi cửa sổ lấy focus và mỗi 60 giây; phiên hết hạn/lỗi xác minh yêu cầu đăng nhập lại. Đây là guard giao diện, không thay thế phân quyền tại từng API. Luồng đăng nhập không còn ghi phiên hoặc báo mở khóa trước khi server xác nhận.
+
+### Firebase Auth và admin server
+
+Seed danh tính admin, đồng bộ Auth/Firestore và thông báo lỗi Google đã được bổ sung. Mật khẩu bootstrap chỉ lấy từ secret server; fallback vẫn xác thực hash trên server, không mở admin từ trình duyệt. Xem [cấu hình, quyền và giới hạn đồng bộ](docs/firebase-auth-setup.md). Firebase thật cần web config, Admin credentials và triển khai Firestore rules; code không tự tạo các quyền truy cập này.
