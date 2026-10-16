@@ -1,7 +1,7 @@
 import {normalizeEmail,firebaseAuthMessage} from './utils/authIdentity';
 import { redactSensitiveLog } from './utils/redaction';
 import { apiFetch as fetch } from './services/apiClient';
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Lock,
@@ -47,6 +47,15 @@ export function AuthModal({
   const [showPassword, setShowPassword] = useState(false);
   const [firebaseNotice,setFirebaseNotice] = useState('');
 
+  const [googleReady, setGoogleReady] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void import('./firebase').then(({ auth }) => {
+      if (active) setGoogleReady(Boolean(auth));
+    }).catch(() => { if (active) setGoogleReady(false); });
+    return () => { active = false; };
+  }, []);
+
   // Login Form States
   const [loginIdentifier, setLoginIdentifier] = useState(currentUser.email || '');
   const [loginPassword, setLoginPassword] = useState('');
@@ -88,6 +97,7 @@ export function AuthModal({
   };
 
   const handleGoogleSignIn = async () => {
+    if (!googleReady) return;
     setLoading(true);
     setErrorMessage(null);
     setSuccessMessage(null);
@@ -357,8 +367,8 @@ export function AuthModal({
             </div>
           )}
 
-          {/* Google Sign-In with Firebase Auth */}
-          <div className="space-y-3 pb-2">
+          {/* Only offer Google when the Firebase SDK initialized successfully. */}
+          {googleReady ? <div className="space-y-3 pb-2">
             <button
               type="button"
               onClick={handleGoogleSignIn}
@@ -392,7 +402,9 @@ export function AuthModal({
               </span>
               <div className="flex-1 h-px bg-slate-800" />
             </div>
-          </div>
+          </div> : <p role="status" className="text-xs text-slate-400 pb-2">
+            Đăng nhập Google chưa khả dụng trên phiên bản này. Bạn có thể dùng biểu mẫu Email/Mật khẩu bên dưới.
+          </p>}
 
           {/* ========================================= */}
           {/* MODE 1: FORM ĐĂNG NHẬP (LOGIN) */}
